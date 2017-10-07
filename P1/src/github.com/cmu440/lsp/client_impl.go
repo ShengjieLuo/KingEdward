@@ -107,7 +107,7 @@ type client struct {
 func NewClient(hostport string, params *Params) (*client, error) {
 	c := client{params,
 		&lspnet.UDPConn{}, -1,  
-		make(chan int), make(chan int), make(chan int), make(chan int), make(chan int)
+		make(chan int), make(chan int), make(chan int), make(chan int), make(chan int),
 		0, 0, 0,
 		time.NewTicker(time.Duration(params.EpochMillis) * time.Millisecond),
 		dataChanel{make(chan []byte, maxDataChanel)},
