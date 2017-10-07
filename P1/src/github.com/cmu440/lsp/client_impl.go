@@ -85,6 +85,7 @@ type client struct {
 	clientClose 		chan int
 	closeEachComp		chan int
 	closeFinished		chan int
+	closeRead			chan int
 	beClosed			int
 	lastMsgEpoch		int
 	currentEpoch		int
@@ -106,7 +107,7 @@ type client struct {
 func NewClient(hostport string, params *Params) (*client, error) {
 	c := client{params,
 		&lspnet.UDPConn{}, -1,  
-		make(chan int), make(chan int), make(chan int), make(chan int),
+		make(chan int), make(chan int), make(chan int), make(chan int), make(chan int)
 		0, 0, 0,
 		time.NewTicker(time.Duration(params.EpochMillis) * time.Millisecond),
 		dataChanel{make(chan []byte, maxDataChanel)},
@@ -198,6 +199,7 @@ func (c *client) mainRoutine() {
 			}else{
 				if c.currentEpoch - c.lastMsgEpoch >= c.params.EpochLimit{
 					c.beClosed = 3
+					c.closeRead <- 1
 					c.closeEachComponent()
 					return
 				}
@@ -312,7 +314,12 @@ func (c *client) ConnID() int {
 }
 
 func (c *client) Read() ([]byte, error) {
-	return <-c.readDataChanel.chanel, nil
+	select{
+	case data := <- c.readDataChanel.chanel:
+		return data, nil
+	case <- c.closeRead:
+		return nil, errors.New("Server closed!")
+	}
 }
 
 func (c *client) Write(payload []byte) error {
