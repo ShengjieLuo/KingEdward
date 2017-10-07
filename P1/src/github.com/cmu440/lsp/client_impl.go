@@ -185,6 +185,10 @@ func (c *client)returnToClose(){
 func (c *client) mainRoutine() {
 	for {
 		select {
+		case <- c.clientClose:
+			c.beClosed = 1
+		default:
+		select {
 		case <- c.epochFirer.C:
 			c.currentEpoch += 1
 			if c.connID == -1{
@@ -219,8 +223,8 @@ func (c *client) mainRoutine() {
 					}
 				}
 			}
-		case <- c.clientClose:
-			c.beClosed = 1 
+		//case <- c.clientClose:
+		//	c.beClosed = 1 
 		case newData := <-c.writeDataChanel.chanel:
 			c.writeDataBuffer.data = append(c.writeDataBuffer.data, newData)
 			c.sendClientData()
@@ -286,6 +290,7 @@ func (c *client) mainRoutine() {
 			}
 		}
 	}
+}
 }
 
 func (c *client) readRoutine() {
