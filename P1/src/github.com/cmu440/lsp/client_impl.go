@@ -36,8 +36,8 @@ import (
 
 //Data Structure1: Constant Variable Definition
 const (
-	maxPendingData = 100
-	maxDataChanel  = 1000
+	maxPendingData = 10000
+	maxDataChanel  = 10000
 )
 
 //Data Structure Definition2: Sub-elements of server struct
@@ -120,7 +120,7 @@ func NewClient(hostport string, params *Params) (*client, error) {
 		dataReceived{make(map[int][]byte)}}
 	//fmt.Println(MsgConnect)
 	c.addr, _ = lspnet.ResolveUDPAddr("udp", hostport)
-	fmt.Printf("c.addr:%s",c.addr)
+	//fmt.Printf("c.addr:%s",c.addr)
 	c.conn, _ = lspnet.DialUDP("udp", nil, c.addr)
 	go c.readRoutine()
 	go c.mainRoutine()
@@ -225,23 +225,22 @@ func (c *client) mainRoutine() {
 				}
 			}
 		case <- c.clientClose:
-			fmt.Printf("[ClientClose] Set c.beClosed Value\n")
+			//fmt.Printf("[ClientClose] Set c.beClosed Value\n")
 			c.beClosed = 1
 			if c.writeWindowBase > len(c.writeDataBuffer.data){
-				c.closeEachComponent()
-				defer c.returnToClose()
+				//c.closeEachComponent()
+				c.returnToClose()
 				return
 			}
 		case newData := <-c.writeDataChanel.chanel:
 			c.writeDataBuffer.data = append(c.writeDataBuffer.data, newData)
 			c.sendClientData()
-			//fmt.Println("here")
 		case newMessage := <-c.readMessageChanel.chanel:
 			c.lastMsgEpoch = c.currentEpoch
 			response := c.myUnmarshal(newMessage)
 			
 			if response.Type == 1 {
-				fmt.Printf("***[Client] Receive Message %d\n",response.SeqNum)
+				//fmt.Printf("***[Client] Receive Message %d\n",response.SeqNum)
 				c.sendMsg(MsgAck, response.SeqNum, nil)
 				if c.readSeqNum == -1 {
 				    if response.SeqNum==1{
@@ -293,7 +292,7 @@ func (c *client) mainRoutine() {
 						}
 						c.sendClientData()
 					}
-					fmt.Printf("[ClientClose] c.beClosed:%d\n",c.beClosed)
+					//fmt.Printf("[ClientClose] c.beClosed:%d\n",c.beClosed)
 					if c.beClosed == 1 && c.writeWindowBase > len(c.writeDataBuffer.data) {
 						c.closeEachComponent()
 						defer c.returnToClose()
