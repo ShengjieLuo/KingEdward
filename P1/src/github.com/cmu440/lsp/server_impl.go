@@ -36,6 +36,7 @@ import (
 	"os"
 	"strconv"
 	"time"
+	"math"
 )
 
 //Data Structure1: Constant Variable Definition
@@ -48,6 +49,7 @@ const (
 	MsgWriteCall         = -1
 	MsgTerminate         = -2
 	MsgDestroy           = -3
+	MsgTicker            = -4
 )
 
 //Data Structure Definition2: Sub-elements of server struct
@@ -68,10 +70,22 @@ type readBuffer struct {
 	channel chan readMessage
 }
 
+type epoch struct {
+	sendEpoch int
+	backoff int
+	content []byte
+}
+
 type connection struct {
 	remote  *lspnet.UDPAddr
 	connid  int
 	channel chan Message
+	sigstp  chan int
+	sigter  chan int
+	epochMap map[int]epoch
+	currentEpoch int
+	lastMsg int
+	lastData int
 }
 
 /* Data Structure Definition3: server
@@ -89,11 +103,14 @@ type server struct {
 	epochLimit int
 	epochMiles int
 	windowSize int
+	maxBackOffInterval int
 	writebuf   writeBuffer
 	readbuf    readBuffer
 	chanmap    map[int]connection
 	connNum    chan int
 	sigstp     chan int
+	sigter     chan int
+	sigclo     chan int
 	listener   *lspnet.UDPConn
 }
 
@@ -112,18 +129,34 @@ func NewServer(port int, params *Params) (Server, error) {
 	chanmaps := make(map[int]connection)
 	connNum := make(chan int, maxConnectionNumber)
 	sigstp := make(chan int, 1)
+	sigter := make(chan int, 100)
+	sigclo := make(chan int, 100)
 	addr, _ := lspnet.ResolveUDPAddr(networkType, ":"+strconv.Itoa(port))
 	listener, err := lspnet.ListenUDP(networkType, addr)
 	if err != nil {
 		log.Fatalln("net.ListenUDP fail.", err)
 		os.Exit(1)
 	}
-	newserver := server{port, params.EpochLimit, params.EpochMillis,
-		params.WindowSize, writebuf, readbuf, chanmaps,
-		connNum, sigstp, listener}
+	newserver := server{port, params.EpochLimit, params.EpochMillis,params.WindowSize,
+		params.MaxBackOffInterval, writebuf, readbuf, chanmaps,
+		connNum, sigstp, sigter, sigclo, listener}
 	newServer = &newserver
 	go readRoutine(&newserver)
 	return newServer, nil
+}
+
+func terminateRoutine(s * server){
+    for{
+	select {
+	case <-s.connNum:
+		s.connNum <- 1
+		time.Sleep(time.Millisecond * 10)
+	default:
+		fmt.Printf("~~~~ ReadRoutine.close ~~~~\n")
+		s.sigclo <-1
+		return
+	}
+    }
 }
 
 /* Function2: Read Routine
@@ -142,18 +175,20 @@ func readRoutine(s *server) {
 		 */
 		select {
 		case <-s.sigstp:
+			fmt.Printf("~~~~ begin server.close() ~~~~\n")
 			msg := Message{MsgTerminate, 0, 0, 0, nil}
 			for i := 1; i <= connid; i++ {
 				s.chanmap[i].channel <- msg
 			}
-			return
+			go terminateRoutine(s)
 		default:
-			//fmt.Printf("...........................\n")
 		}
 
 		//Step2: Read packet from UDP connection
 		readContent := make([]byte, 1024)
+		fmt.Printf("[0] Waiting for message\n")
 		n, remoteAddr, err := s.listener.ReadFromUDP(readContent)
+		fmt.Printf("[0] Receive %s \n",readContent)
 		if err != nil {
 			fmt.Errorf("Cannot read from connection: %v\n", err)
 		}
@@ -164,35 +199,56 @@ func readRoutine(s *server) {
 			fmt.Errorf("Can not decode data: %v\n", err)
 		}
 
-		//Step3: Ignore some irregualr package.
-		//For example, Server would not get ACK signal within seqnum==0
-		if msg.Type == MsgAck && msg.SeqNum == 0 {
-			//fmt.Printf("%s",data)
-			continue
-		}
-		/*fmt.Printf("[0] Connection from %s\n",remoteAddr.String())
-		fmt.Printf("[0] Receive %s-->(%d,%d,%d,%d,%s) \n",
-			readContent,msg.Type, msg.ConnID, msg.SeqNum,
-			msg.Size,msg.Payload)
-		*/
+		//fmt.Printf("[0] Receive %s-->(%d,%d,%d,%d,%s) \n", readContent,msg.Type, msg.ConnID, msg.SeqNum,msg.Size,msg.Payload)
 		//Step4: Update the connection situation
 		if msg.Type == MsgConnect {
+			flag := true
+			for _,v := range s.chanmap {
+				if v.remote.String()==remoteAddr.String() {
+					flag = false
+					break
+				}
+			}
+			if flag==false {
+				continue
+			}
 			connid += 1
 			connChannel := make(chan Message, connChannelCapacity)
+			connSigstp  := make(chan int,100)
+			connSigter  := make(chan int,100)
+			connEpochMap := make(map[int]epoch)
 			newConnection := connection{remoteAddr,
-				connid, connChannel}
+				connid, connChannel,connSigstp, connSigter, connEpochMap,0,-1,-1}
 			s.chanmap[connid] = newConnection
 			newConnection.channel <- *msg
-			s.connNum <- 1
+			s.connNum <- 1 //Count Connection Main Routine
+			s.connNum <- 1 //Count Connection Time Routine
 			ch := make(chan []byte, writeChannelCapacity)
 			writeCh := writeChannel{ch}
 			s.writebuf.buf[connid] = writeCh
 			//fmt.Printf("[%d] Establish new connection! \n",connid)
+			go timeRoutine(s, &newConnection)
 			go mainRoutine(s, &newConnection, writeCh)
 		} else {
 			s.chanmap[msg.ConnID].channel <- *msg
 		}
 	}
+}
+
+
+func timeRoutine(s *server, conn *connection){
+	ticker := time.NewTicker(time.Millisecond*time.Duration(s.epochMiles))
+	for _ = range ticker.C {
+            msg := Message{MsgTicker,0,0,0,nil}
+	    conn.channel<-msg
+	    select{
+		case <-conn.sigstp:
+                    <-s.connNum
+		    fmt.Printf("[%d] Time Routine Terminate...\n",conn.connid)
+		    return
+		default:
+	    }
+        }
 }
 
 func mainRoutine(s *server, conn *connection, writeCh writeChannel) {
@@ -208,29 +264,22 @@ func mainRoutine(s *server, conn *connection, writeCh writeChannel) {
 	terminateFlag := false
 
 	for {
+		//fmt.Printf("[%d] Send %d Message (Target:%d)\n",conn.connid,sendDataCount,receAckCount+s.windowSize)
 		for sendDataCount < receAckCount+s.windowSize {
 			flag := true
 			select {
 			case i := <-writeCh.channel:
 				sendDataCount += 1
-				writeMsg := DataMsg(conn.connid,
-					sendDataCount, i)
+				writeMsg := DataMsg(conn.connid,sendDataCount, i)
+				conn.epochMap[sendDataCount] = epoch{conn.currentEpoch,0,writeMsg}
+				fmt.Printf("[%d] Send Message (%s) to %s\n",conn.connid,writeMsg,conn.remote.String())
 				s.listener.WriteToUDP(writeMsg, conn.remote)
-				/*fmt.Printf("[%d] Send Message (%s) to %s\n",
-				conn.connid,writeMsg,conn.remote.String())*/
 			default:
 				flag = false
-				/* When all of the following conditions is met,
-				   then terminate the process
-				   1. An closeConn() function is called by user
-				   2. There is no pending message in writebuffer
-				   3. All sent messages have already got ACK
-				*/
-				if terminateFlag && sendDataCount ==
-					receAckCount {
+				if terminateFlag && sendDataCount == receAckCount {
 					<-s.connNum
-					/*fmt.Printf("[%d] Terminate...\n",
-					conn.connid)*/
+					conn.sigstp <-1
+					fmt.Printf("[%d] Main Routine Terminate...\n",conn.connid)
 					return
 				}
 				break
@@ -250,15 +299,8 @@ func mainRoutine(s *server, conn *connection, writeCh writeChannel) {
 			  conn.connid,writeMsg,conn.remote.String())*/
 			s.listener.WriteToUDP(writeMsg, conn.remote)
 		} else if msg.Type == MsgData {
-			/* Server gets a "data" message from client
-			1. Return ACK message to client
-			2. Check whether it is in-order data
-			3. If no,  store it in receDataBuffer
-			4. If yes, send it into server.readbuf
-			*/
 			writeMsg := AckMsg(conn.connid, msg.SeqNum)
-			/*fmt.Printf("[%d] Send Message (%s) to %s\n"
-			  ,conn.connid,writeMsg,conn.remote.String())*/
+			fmt.Printf("[%d] Send Message (%s) to %s\n",conn.connid,writeMsg,conn.remote.String())
 			s.listener.WriteToUDP(writeMsg, conn.remote)
 			if msg.SeqNum == (receDataCount + 1) {
 				readMsg := readMessage{conn.connid, msg.Payload}
@@ -268,12 +310,8 @@ func mainRoutine(s *server, conn *connection, writeCh writeChannel) {
 					value, ok :=
 						receDataBuffer[receDataCount+1]
 					if ok {
-						readMsg :=
-							readMessage{
-								conn.connid,
-								value}
-						delete(receDataBuffer,
-							receDataCount+1)
+						readMsg := readMessage{conn.connid,value}
+						delete(receDataBuffer,receDataCount+1)
 						s.readbuf.channel <- readMsg
 						receDataCount += 1
 						continue
@@ -281,16 +319,13 @@ func mainRoutine(s *server, conn *connection, writeCh writeChannel) {
 						break
 					}
 				}
-			} else {
+			} else if (msg.SeqNum > receDataCount+1) {
 				receDataBuffer[msg.SeqNum] = msg.Payload
 			}
+			conn.lastMsg = conn.currentEpoch
+			conn.lastData = conn.currentEpoch
 		} else if msg.Type == MsgAck {
-			/* Server gets a "ack" message from client
-			1. Updata receAckCount
-			2. Check whether there is data blocked in writebuf
-			3. If no continue
-			4. If yes, send the blocked data
-			*/
+		    if (msg.SeqNum >= receAckCount+1){
 			receAckBuffer[msg.SeqNum] = 1
 			for {
 				_, ok := receAckBuffer[receAckCount+1]
@@ -300,10 +335,59 @@ func mainRoutine(s *server, conn *connection, writeCh writeChannel) {
 					break
 				}
 			}
+		        delete(conn.epochMap,msg.SeqNum)
+                    }
+		    conn.lastMsg = conn.currentEpoch
 		} else if msg.Type == MsgWriteCall {
 			continue
 		} else if msg.Type == MsgTerminate {
 			terminateFlag = true
+		} else if msg.Type == MsgTicker{
+			fmt.Printf("[%d] #%d Epoch Ticker...Unacked Message:%d\n",conn.connid,conn.currentEpoch,len(conn.epochMap))
+			if (conn.currentEpoch >= conn.lastMsg + s.epochLimit){
+				<-s.connNum
+				conn.sigstp <- 1 //Terminate Time Routine
+				s.readbuf.channel <- readMessage{conn.connid,nil}
+	                        fmt.Printf("[%d] Main Routine Terminate...\n",conn.connid)
+				return
+			}
+			if (conn.currentEpoch != conn.lastData){
+				msg := AckMsg(conn.connid,0)
+				s.listener.WriteToUDP(msg,conn.remote)
+			}
+			for sn,epoch := range(conn.epochMap) {
+				fmt.Printf(" --- [%d] Epoch:%d->%d(%d)---\n",conn.connid,epoch.sendEpoch, epoch.backoff, s.maxBackOffInterval)
+				if (conn.currentEpoch == epoch.sendEpoch + epoch.backoff){
+					s.listener.WriteToUDP(epoch.content,conn.remote)
+					newBackoff := updateBackoff(epoch.backoff,s.maxBackOffInterval)
+					epoch.backoff = newBackoff
+					delete(conn.epochMap,sn)
+					conn.epochMap[sn] = epoch
+					fmt.Printf(" --- [%d] Send Message (%s) [Epoch:%d->%d(%d)] [Curr:%d]---\n",conn.connid,epoch.content,epoch.sendEpoch, epoch.backoff, s.maxBackOffInterval, conn.currentEpoch)
+				}
+			}
+			conn.currentEpoch = conn.currentEpoch + 1;
+		}
+	}
+}
+
+
+func updateBackoff(val int, limit int) int{
+	i:=-1.0
+	back:=-1
+	for {
+		if (int(i)==-1){
+			back = 0
+		} else {
+			back = int(math.Pow(2,i))
+		}
+		i = i+1
+		if ( val>=back && val<back*2+1 ){
+			if (back>limit){
+				return val + limit + 1
+			} else {
+				return val + back + 1
+			}
 		}
 	}
 }
@@ -324,8 +408,14 @@ func DataMsg(id int, sn int, payload []byte) []byte {
 
 /* Function Read: read messages from readbuf channel*/
 func (s *server) Read() (int, []byte, error) {
-	msg := <-s.readbuf.channel
-	return msg.connid, msg.content, nil
+	for{
+		msg := <-s.readbuf.channel
+		if msg.content != nil{
+			return msg.connid, msg.content, nil
+		} else {
+			return msg.connid, nil, errors.New("Connection Closed")
+		}
+	}
 }
 
 /* Function Write: write messages into writebuf channel*/
@@ -360,17 +450,14 @@ func (s *server) CloseConn(connID int) error {
 */
 func (s *server) Close() error {
 	s.sigstp <- 1
-	time.Sleep(time.Second * 1)
+	time.Sleep(time.Millisecond * 10)
 	for {
 		select {
-		case <-s.connNum:
-			//fmt.Printf("Routines not closed... Wait...\n")
-			s.connNum <- 1
-			time.Sleep(time.Second * 1)
-		default:
-			//fmt.Printf("*********Close Server************\n")
-			//panic("ERROR: Goroutine existed AFTER close!\n")
+		case <-s.sigclo:
 			return nil
+			//panic("ERROR: Goroutine existed AFTER close!\n")
+		default:
+			time.Sleep(time.Millisecond * 10)
 		}
 	}
 }
