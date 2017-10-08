@@ -28,10 +28,10 @@ package lsp
 
 import (
 	"encoding/json"
-	"fmt"
-	"time"
 	"errors"
+	"fmt"
 	"github.com/cmu440/lspnet"
+	"time"
 )
 
 //Data Structure1: Constant Variable Definition
@@ -57,8 +57,8 @@ type dataReceived struct {
 	buf map[int][]byte
 }
 
-type epochInfo struct{
-	sentEpoch int
+type epochInfo struct {
+	sentEpoch      int
 	currentBackOff int
 }
 
@@ -78,36 +78,36 @@ type epochInfo struct{
    13. readDataReceived: received out of order server data
 */
 type client struct {
-	params     			*Params
-	conn        		*lspnet.UDPConn
-	addr			*lspnet.UDPAddr
-	connID      		int
-	connResult			chan int
-	clientClose 		chan int
-	closeEachComp		chan int
-	closeFinished		chan int
-	closeRead			chan int
-	beClosed			int
-	lastMsgEpoch		int
-	currentEpoch		int
-	epochFirer			*time.Ticker
+	params        *Params
+	conn          *lspnet.UDPConn
+	addr          *lspnet.UDPAddr
+	connID        int
+	connResult    chan int
+	clientClose   chan int
+	closeEachComp chan int
+	closeFinished chan int
+	closeRead     chan int
+	beClosed      int
+	lastMsgEpoch  int
+	currentEpoch  int
+	epochFirer    *time.Ticker
 
-	writeDataChanel		dataChanel
-	writeDataBuffer   	dataSendBuffer
-	writeSeqNum     	int
-	writeWindowBase  	int
-	writeACKReceived 	map[int]int
-	writeOnFly 			map[int]epochInfo
+	writeDataChanel  dataChanel
+	writeDataBuffer  dataSendBuffer
+	writeSeqNum      int
+	writeWindowBase  int
+	writeACKReceived map[int]int
+	writeOnFly       map[int]epochInfo
 
-	readSeqNum     		int
-	readMessageChanel	dataChanel
-	readDataChanel		dataChanel
-	readDataReceived 	dataReceived
+	readSeqNum        int
+	readMessageChanel dataChanel
+	readDataChanel    dataChanel
+	readDataReceived  dataReceived
 }
 
 func NewClient(hostport string, params *Params) (*client, error) {
 	c := client{params,
-		&lspnet.UDPConn{}, &lspnet.UDPAddr{},-1,
+		&lspnet.UDPConn{}, &lspnet.UDPAddr{}, -1,
 		make(chan int), make(chan int), make(chan int), make(chan int), make(chan int),
 		0, 0, 0,
 		time.NewTicker(time.Duration(params.EpochMillis) * time.Millisecond),
@@ -125,7 +125,7 @@ func NewClient(hostport string, params *Params) (*client, error) {
 	go c.readRoutine()
 	go c.mainRoutine()
 	c.sendMsg(MsgConnect, 0, nil)
-	if result := <- c.connResult; result == 0{
+	if result := <-c.connResult; result == 0 {
 		return &c, errors.New("Can't conect to server, time out!")
 	}
 	//fmt.Println("Connection succ.")
@@ -133,14 +133,14 @@ func NewClient(hostport string, params *Params) (*client, error) {
 	//return c, errors.New("not yet implemented")
 }
 
-func (c *client) sendMsg(tp MsgType, seqNum int, payload []byte){
+func (c *client) sendMsg(tp MsgType, seqNum int, payload []byte) {
 	var data *Message
-	if tp == MsgConnect{
+	if tp == MsgConnect {
 		data = NewConnect()
-	}else{
-		if tp == MsgData{
+	} else {
+		if tp == MsgData {
 			data = NewData(c.connID, seqNum, len(payload), payload)
-		}else{
+		} else {
 			data = NewAck(c.connID, seqNum)
 		}
 	}
@@ -162,7 +162,7 @@ func (c *client) myUnmarshal(data []byte) Message {
 }
 
 func (c *client) sendClientData() {
-	for c.writeSeqNum <= c.writeWindowBase + c.params.WindowSize-1 && c.writeSeqNum <= len(c.writeDataBuffer.data) {
+	for c.writeSeqNum <= c.writeWindowBase+c.params.WindowSize-1 && c.writeSeqNum <= len(c.writeDataBuffer.data) {
 		payload := c.writeDataBuffer.data[c.writeSeqNum-1]
 		c.sendMsg(MsgData, c.writeSeqNum, payload)
 		c.writeOnFly[c.writeSeqNum] = epochInfo{c.currentEpoch, 0}
@@ -170,64 +170,64 @@ func (c *client) sendClientData() {
 	}
 }
 
-func (c *client)closeEachComponent(){
+func (c *client) closeEachComponent() {
 	numOfCom := 1
 	//if c.beClosed == 1{
 	//	numOfCom = 2
 	//}
-	for i := 0; i < numOfCom; i++{
-		c.closeEachComp <-1
+	for i := 0; i < numOfCom; i++ {
+		c.closeEachComp <- 1
 	}
 	c.epochFirer.Stop()
 	return
 }
 
-func (c *client)returnToClose(){
+func (c *client) returnToClose() {
 	c.closeFinished <- 1
 }
 
 func (c *client) mainRoutine() {
 	for {
 		select {
-		case <- c.epochFirer.C:
+		case <-c.epochFirer.C:
 			c.currentEpoch += 1
-			if c.connID == -1{
-				if c.currentEpoch >= 5{
+			if c.connID == -1 {
+				if c.currentEpoch >= 5 {
 					c.beClosed = 2
 					c.connResult <- 0
 					c.closeEachComponent()
 					return
 				}
 				c.sendMsg(MsgConnect, 0, nil)
-			}else{
-				if c.currentEpoch - c.lastMsgEpoch >= c.params.EpochLimit{
+			} else {
+				if c.currentEpoch-c.lastMsgEpoch >= c.params.EpochLimit {
 					c.beClosed = 3
 					c.closeRead <- 1
 					c.closeEachComponent()
 					return
 				}
-				if c.readSeqNum == -1{
+				if c.readSeqNum == -1 {
 					c.sendMsg(MsgAck, 0, nil)
 				}
 				for seqNum, epInfo := range c.writeOnFly {
-					if epInfo.sentEpoch + epInfo.currentBackOff +1 == c.currentEpoch{
+					if epInfo.sentEpoch+epInfo.currentBackOff+1 == c.currentEpoch {
 						payload := c.writeDataBuffer.data[seqNum-1]
 						c.sendMsg(MsgData, seqNum, payload)
 						newBackoff := epInfo.currentBackOff * 2
-						if epInfo.currentBackOff == 0{
+						if epInfo.currentBackOff == 0 {
 							newBackoff = 1
 						}
-						if newBackoff > c.params.MaxBackOffInterval{
+						if newBackoff > c.params.MaxBackOffInterval {
 							newBackoff = c.params.MaxBackOffInterval
 						}
 						c.writeOnFly[seqNum] = epochInfo{c.currentEpoch, newBackoff}
 					}
 				}
 			}
-		case <- c.clientClose:
+		case <-c.clientClose:
 			//fmt.Printf("[ClientClose] Set c.beClosed Value\n")
 			c.beClosed = 1
-			if c.writeWindowBase > len(c.writeDataBuffer.data){
+			if c.writeWindowBase > len(c.writeDataBuffer.data) {
 				//c.closeEachComponent()
 				c.returnToClose()
 				return
@@ -238,24 +238,29 @@ func (c *client) mainRoutine() {
 		case newMessage := <-c.readMessageChanel.chanel:
 			c.lastMsgEpoch = c.currentEpoch
 			response := c.myUnmarshal(newMessage)
-			
+
 			if response.Type == 1 {
 				//fmt.Printf("***[Client] Receive Message %d\n",response.SeqNum)
+				if response.Size < len(response.Payload) {
+					response.Payload = response.Payload[0:response.Size]
+				} else if response.Size > len(response.Payload) {
+					continue
+				}
 				c.sendMsg(MsgAck, response.SeqNum, nil)
 				if c.readSeqNum == -1 {
-				    if response.SeqNum==1{
-					c.readSeqNum = response.SeqNum + 1
-					c.readDataChanel.chanel <- response.Payload
-				    } else {
-					c.readSeqNum = 1
-					c.readDataReceived.buf[response.SeqNum] = response.Payload
-				    }
+					if response.SeqNum == 1 {
+						c.readSeqNum = response.SeqNum + 1
+						c.readDataChanel.chanel <- response.Payload
+					} else {
+						c.readSeqNum = 1
+						c.readDataReceived.buf[response.SeqNum] = response.Payload
+					}
 				} else {
 					/*fmt.Printf("*******************************\n")
 					fmt.Printf("response.SeqNum:%d\n",response.SeqNum)
 					fmt.Printf("c.readSeqNum:%d\n",c.readSeqNum)
 					fmt.Printf("*******************************\n")*/
-					if response.SeqNum < c.readSeqNum{
+					if response.SeqNum < c.readSeqNum {
 						continue
 					}
 					if response.SeqNum == c.readSeqNum {
@@ -274,8 +279,8 @@ func (c *client) mainRoutine() {
 			} else {
 				if response.Type == 2 {
 					//fmt.Println(c.writeWindowBase)
-					if response.SeqNum == 0{
-						if c.connID == -1{
+					if response.SeqNum == 0 {
+						if c.connID == -1 {
 							c.connID = response.ConnID
 							c.connResult <- 1
 						}
@@ -306,8 +311,8 @@ func (c *client) mainRoutine() {
 
 func (c *client) readRoutine() {
 	for {
-		select{
-		case <- c.closeEachComp:
+		select {
+		case <-c.closeEachComp:
 			return
 		default:
 			ack := make([]byte, 1500)
@@ -323,10 +328,10 @@ func (c *client) ConnID() int {
 }
 
 func (c *client) Read() ([]byte, error) {
-	select{
-	case data := <- c.readDataChanel.chanel:
+	select {
+	case data := <-c.readDataChanel.chanel:
 		return data, nil
-	case <- c.closeRead:
+	case <-c.closeRead:
 		return nil, errors.New("Server closed!")
 	}
 }
@@ -337,10 +342,10 @@ func (c *client) Write(payload []byte) error {
 }
 
 func (c *client) Close() error {
-	fmt.Printf("[%d] Close Client.\n",c.connID)
+	//fmt.Printf("[%d] Close Client.\n",c.connID)
 	c.clientClose <- 1
-	fmt.Printf("[%d] Close Client..\n",c.connID)
-	<- c.closeFinished
-	fmt.Printf("[%d] Close Client...\n",c.connID)
+	//fmt.Printf("[%d] Close Client..\n",c.connID)
+	<-c.closeFinished
+	//fmt.Printf("[%d] Close Client...\n",c.connID)
 	return nil
 }
