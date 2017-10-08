@@ -146,6 +146,20 @@ func NewServer(port int, params *Params) (Server, error) {
 }
 
 func terminateRoutine(s * server){
+    waitFlag := false
+    for waitFlag==false {
+	select {
+	case <-s.sigstp:
+		msg := Message{MsgTerminate, 0, 0, 0, nil}
+		for i := 1; i <= len(s.chanmap); i++ {
+			s.chanmap[i].channel <- msg
+		}
+		waitFlag = true
+		break;
+	default:
+	}
+    }
+    fmt.Printf("~~~~ Wait for main&time routine close ~~~~\n")
     for{
 	select {
 	case <-s.connNum:
@@ -157,6 +171,7 @@ func terminateRoutine(s * server){
 		return
 	}
     }
+    return
 }
 
 /* Function2: Read Routine
@@ -168,7 +183,7 @@ func terminateRoutine(s * server){
 func readRoutine(s *server) {
 	connid := 0
 	for {
-		select {
+		/*select {
 		case <-s.sigstp:
 			fmt.Printf("~~~~ begin server.close() ~~~~\n")
 			msg := Message{MsgTerminate, 0, 0, 0, nil}
@@ -177,7 +192,7 @@ func readRoutine(s *server) {
 			}
 			go terminateRoutine(s)
 		default:
-		}
+		}*/
 
 		//Step2: Read packet from UDP connection
 		readContent := make([]byte, 1024)
@@ -194,7 +209,7 @@ func readRoutine(s *server) {
 			fmt.Errorf("Can not decode data: %v\n", err)
 		}
 
-		fmt.Printf("[0] Receive %s-->(%d,%d,%d,%d,%s) \n", readContent,msg.Type, msg.ConnID, msg.SeqNum,msg.Size,msg.Payload)
+		//fmt.Printf("[0] Receive %s-->(%d,%d,%d,%d,%s) \n", readContent,msg.Type, msg.ConnID, msg.SeqNum,msg.Size,msg.Payload)
 		//Step4: Update the connection situation
 		if msg.Type == MsgConnect {
 			flag := true
@@ -446,6 +461,7 @@ func (s *server) CloseConn(connID int) error {
 func (s *server) Close() error {
 	fmt.Printf("~~~~ Begin server.Close() ~~~~\n")
 	s.sigstp <- 1
+	go terminateRoutine(s)
 	time.Sleep(time.Millisecond * 10)
 	for {
 		select {
