@@ -112,6 +112,7 @@ type client struct {
 	readDataChanel    dataChanel
 	readDataReceived  dataReceived
 }
+
 /*
  * NewClient(): Create a new client()
  */
@@ -119,7 +120,7 @@ func NewClient(hostport string, params *Params) (*client, error) {
 	// Initialize each attribute of client
 	c := client{params,
 		&lspnet.UDPConn{}, &lspnet.UDPAddr{}, -1,
-		make(chan int), make(chan int), make(chan int), 
+		make(chan int), make(chan int), make(chan int),
 		make(chan int), make(chan int),
 		0, 0, 0,
 		time.NewTicker(time.Duration(params.EpochMillis) * time.Millisecond),
@@ -150,7 +151,7 @@ func NewClient(hostport string, params *Params) (*client, error) {
 
 /*
  * sendMsg(): send a message of type:MsgType, sequence number: seqnum
- *				and payload: payload 
+ *				and payload: payload
  */
 func (c *client) sendMsg(tp MsgType, seqNum int, payload []byte) {
 	var data *Message
@@ -171,7 +172,7 @@ func (c *client) sendMsg(tp MsgType, seqNum int, payload []byte) {
 	c.conn.Write(msg)
 }
 
-/* 
+/*
  * myUnmarshal(): decode byte array into struct
  */
 func (c *client) myUnmarshal(data []byte) Message {
@@ -187,9 +188,9 @@ func (c *client) myUnmarshal(data []byte) Message {
  * sendClientData(): clear all pending data within the window
  */
 func (c *client) sendClientData() {
-	// If there are data in the window that not sent 
-	for c.writeSeqNum <= c.writeWindowBase+c.params.WindowSize-1 
-		&& c.writeSeqNum <= len(c.writeDataBuffer.data) {
+	// If there are data in the window that not sent
+	for c.writeSeqNum <= c.writeWindowBase+c.params.WindowSize-1 &&
+		c.writeSeqNum <= len(c.writeDataBuffer.data) {
 		payload := c.writeDataBuffer.data[c.writeSeqNum-1]
 		c.sendMsg(MsgData, c.writeSeqNum, payload)
 		// Record the on fly data
@@ -261,7 +262,7 @@ func (c *client) mainRoutine() {
 				// Check each on fly message and re-send if needed
 				for seqNum, epInfo := range c.writeOnFly {
 					// Reach limit, resend
-					if epInfo.sentEpoch+epInfo.currentBackOff+1== c.currentEpoch{
+					if epInfo.sentEpoch+epInfo.currentBackOff+1 == c.currentEpoch {
 						payload := c.writeDataBuffer.data[seqNum-1]
 						c.sendMsg(MsgData, seqNum, payload)
 						// Calculate new backoff
@@ -272,7 +273,7 @@ func (c *client) mainRoutine() {
 						if newBackoff > c.params.MaxBackOffInterval {
 							newBackoff = c.params.MaxBackOffInterval
 						}
-						c.writeOnFly[seqNum]=epochInfo{c.currentEpoch,newBackoff}
+						c.writeOnFly[seqNum] = epochInfo{c.currentEpoch, newBackoff}
 					}
 				}
 			}
@@ -315,7 +316,7 @@ func (c *client) mainRoutine() {
 					} else {
 						// First message is out of order, buffer it first
 						c.readSeqNum = 1
-						c.readDataReceived.buf[response.SeqNum]= response.Payload
+						c.readDataReceived.buf[response.SeqNum] = response.Payload
 					}
 				} else {
 					// Discard message already received
@@ -336,7 +337,7 @@ func (c *client) mainRoutine() {
 						}
 					} else {
 						// Out-of-order message, buffer it
-						c.readDataReceived.buf[response.SeqNum]= response.Payload
+						c.readDataReceived.buf[response.SeqNum] = response.Payload
 					}
 				}
 			} else {
@@ -368,8 +369,8 @@ func (c *client) mainRoutine() {
 						c.sendClientData()
 					}
 					// Close() has been called and all data has been received,return
-					if c.beClosed == 1 
-						&& c.writeWindowBase > len(c.writeDataBuffer.data){
+					if c.beClosed == 1 &&
+						c.writeWindowBase > len(c.writeDataBuffer.data) {
 						c.closeEachComponent()
 						defer c.returnToClose()
 						return
@@ -419,7 +420,6 @@ func (c *client) Read() ([]byte, error) {
 		return nil, errors.New("Server closed!")
 	}
 }
-
 
 /*
  * Write(): Write data to server

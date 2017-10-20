@@ -1,13 +1,16 @@
 /******************************************************************
- **                    15-640 Project1 CheckPoint1               **
+ **                    15-640 Project1 CheckPoint2               **
  **                     Distributed Bitcoin Miner                **
  ******************************************************************
  **Intorduction:                                                 **
  **1. Implementation of Live Sequence Protocol                   **
  **2. LSP Provides features that lies somewhere between UDP and  **
  **   TCP. It supports a client-server communication model       **
- **3. Two points of the full project are covered in the cp1      **
- **   (1) Sliding Window (2)Out-of-order                         **
+ **3. Four points of the full project are covered in the cp2     **
+ **   (1) Sliding Window                                         **
+ **   (2) Out-of-order                                           **
+ **   (3) Epoch Mechnism is designed for timeout message         **
+ **   (4) Close is optimized for epoch mechnism to use           **
  ******************************************************************
  **For TA and Reviewer                                           **
  **1. Map Structure in Golang is used to store data message      **
@@ -76,6 +79,16 @@ type epoch struct {
 	content   []byte
 }
 
+/* Data Structure Definition3: client
+   1. remote: the UDP address
+   2. connid: id of connection
+   3. channel: Channel used as the beridge between readRoutine and mainRoutine
+   4. sigstp: signal stop channel (used in close)
+   5. sigter: signal terminate channel (used in close)
+   6. epochMap: store epochs
+   7. currentEpoch: record current epoch
+   8. lastMsg, lastData: used in Epoch Mechnism
+*/
 type connection struct {
 	remote       *lspnet.UDPAddr
 	connid       int
@@ -88,14 +101,16 @@ type connection struct {
 	lastData     int
 }
 
-/* Data Structure Definition3: server
+/* Data Structure Definition4: server
    1. Port: Port of server service avaliable
-   2. epochLimit, epochMiles: Used in cp2
+   2. epochLimit, epochMiles, windowssize: Used in cp2
    3. writebuf: pass the message from write to mainroutine
    4. readbuf : pass the message from mainroutine to read
    5. chanmap : store the connection between client and server
    6. connNum : a channel used to monitor live connections
    7. sigstp  : a channel used to accept stop signal from user
+   8. sigter  : a channel used to accept terminate signal
+   9. sigclo  : a channel used to accept close signal
    8. listener: a UDP network socket
 */
 type server struct {
@@ -137,14 +152,19 @@ func NewServer(port int, params *Params) (Server, error) {
 		log.Fatalln("net.ListenUDP fail.", err)
 		os.Exit(1)
 	}
-	newserver := server{port, params.EpochLimit, params.EpochMillis, params.WindowSize,
-		params.MaxBackOffInterval, writebuf, readbuf, chanmaps,
-		connNum, sigstp, sigter, sigclo, listener}
+	newserver := server{port, params.EpochLimit, params.EpochMillis,
+		params.WindowSize, params.MaxBackOffInterval, writebuf, readbuf,
+		chanmaps, connNum, sigstp, sigter, sigclo, listener}
 	newServer = &newserver
 	go readRoutine(&newserver)
 	return newServer, nil
 }
 
+/* Function2: TerminateRoutine
+ * 1. The specific routine to terminate server only
+ * 2. Begin when Close() function is called
+ * 3. End when all routines are terminated
+ */
 func terminateRoutine(s *server) {
 	waitFlag := false
 	for waitFlag == false {
@@ -159,14 +179,12 @@ func terminateRoutine(s *server) {
 		default:
 		}
 	}
-	//fmt.Printf("~~~~ Wait for main&time routine close ~~~~\n")
 	for {
 		select {
 		case <-s.connNum:
 			s.connNum <- 1
 			time.Sleep(time.Millisecond * 10)
 		default:
-			//fmt.Printf("~~~~ ReadRoutine.close ~~~~\n")
 			s.sigclo <- 1
 			return
 		}
@@ -174,7 +192,7 @@ func terminateRoutine(s *server) {
 	return
 }
 
-/* Function2: Read Routine
+/* Function3: Read Routine
  * 1. Read packats from UDP connection
  * 2. Check whether it comes from a new client
  * 3. If it comes from a new client, initialize a new Connection
@@ -183,22 +201,9 @@ func terminateRoutine(s *server) {
 func readRoutine(s *server) {
 	connid := 0
 	for {
-		/*select {
-		case <-s.sigstp:
-			fmt.Printf("~~~~ begin server.close() ~~~~\n")
-			msg := Message{MsgTerminate, 0, 0, 0, nil}
-			for i := 1; i <= connid; i++ {
-				s.chanmap[i].channel <- msg
-			}
-			go terminateRoutine(s)
-		default:
-		}*/
-
-		//Step2: Read packet from UDP connection
+		//Step1: Read packet from UDP connection
 		readContent := make([]byte, 1024)
-		//fmt.Printf("[0] Waiting for message\n")
 		n, remoteAddr, err := s.listener.ReadFromUDP(readContent)
-		//fmt.Printf("[0] Receive %s \n",readContent)
 		if err != nil {
 			fmt.Errorf("Cannot read from connection: %v\n", err)
 		}
@@ -216,8 +221,7 @@ func readRoutine(s *server) {
 			}
 		}
 
-		//fmt.Printf("[0] Receive -->(%d,%d,%d,%d,%s) \n",msg.Type, msg.ConnID, msg.SeqNum,msg.Size,msg.Payload)
-		//Step4: Update the connection situation
+		//Step2: Update the connection situation
 		if msg.Type == MsgConnect {
 			flag := true
 			for _, v := range s.chanmap {
@@ -234,8 +238,8 @@ func readRoutine(s *server) {
 			connSigstp := make(chan int, 100)
 			connSigter := make(chan int, 100)
 			connEpochMap := make(map[int]epoch)
-			newConnection := connection{remoteAddr,
-				connid, connChannel, connSigstp, connSigter, connEpochMap, 0, -1, -1}
+			newConnection := connection{remoteAddr, connid, connChannel,
+				connSigstp, connSigter, connEpochMap, 0, -1, -1}
 			s.chanmap[connid] = newConnection
 			newConnection.channel <- *msg
 			s.connNum <- 1 //Count Connection Main Routine
@@ -243,7 +247,6 @@ func readRoutine(s *server) {
 			ch := make(chan []byte, writeChannelCapacity)
 			writeCh := writeChannel{ch}
 			s.writebuf.buf[connid] = writeCh
-			//fmt.Printf("[%d] Establish new connection! \n",connid)
 			go timeRoutine(s, &newConnection)
 			go mainRoutine(s, &newConnection, writeCh)
 		} else {
@@ -252,6 +255,9 @@ func readRoutine(s *server) {
 	}
 }
 
+/* Function4: TimeRoutine
+ * Time routine is used to trigger the epoch event
+ */
 func timeRoutine(s *server, conn *connection) {
 	ticker := time.NewTicker(time.Millisecond * time.Duration(s.epochMiles))
 	for _ = range ticker.C {
@@ -260,18 +266,19 @@ func timeRoutine(s *server, conn *connection) {
 		select {
 		case <-conn.sigstp:
 			<-s.connNum
-			//fmt.Printf("[%d] Time Routine Terminate...\n",conn.connid)
 			return
 		default:
 		}
 	}
 }
 
+/* Function5: MainRoutine
+ * MainRoutine is the most critical part in this program. It keeps the status
+ * of each alive routine and accepts the read/write request from users.
+ * Also the epoch protocol and window protocal are implemented in it.
+ */
 func mainRoutine(s *server, conn *connection, writeCh writeChannel) {
-	//fmt.Printf("[%d] Main Routine Begins\n", conn.connid)
-	//receAckCount records the number of ACKs we had get from connection
-	//receDataCount records the number of data we had get from connection
-	//sendDataCount records the number of data we had sent into connection
+
 	receAckCount := 0
 	sendDataCount := 0
 	receDataCount := 0
@@ -280,22 +287,20 @@ func mainRoutine(s *server, conn *connection, writeCh writeChannel) {
 	terminateFlag := false
 
 	for {
-		//fmt.Printf("[%d] Send %d Message (Target:%d)\n",conn.connid,sendDataCount,receAckCount+s.windowSize)
 		for sendDataCount < receAckCount+s.windowSize {
 			flag := true
 			select {
 			case i := <-writeCh.channel:
 				sendDataCount += 1
 				writeMsg := DataMsg(conn.connid, sendDataCount, i)
-				conn.epochMap[sendDataCount] = epoch{conn.currentEpoch, 0, writeMsg}
-				//fmt.Printf("[%d] Send Message (%s) to %s\n",conn.connid,writeMsg,conn.remote.String())
+				conn.epochMap[sendDataCount] =
+					epoch{conn.currentEpoch, 0, writeMsg}
 				s.listener.WriteToUDP(writeMsg, conn.remote)
 			default:
 				flag = false
 				if terminateFlag && sendDataCount == receAckCount {
 					<-s.connNum
 					conn.sigstp <- 1
-					//fmt.Printf("[%d] Main Routine Terminate...\n",conn.connid)
 					return
 				}
 				break
@@ -311,12 +316,9 @@ func mainRoutine(s *server, conn *connection, writeCh writeChannel) {
 			   2. Return ACK message to client
 			*/
 			writeMsg := AckMsg(conn.connid, 0)
-			/*fmt.Printf("[%d] Send Message (%s) to %s\n",
-			  conn.connid,writeMsg,conn.remote.String())*/
 			s.listener.WriteToUDP(writeMsg, conn.remote)
 		} else if msg.Type == MsgData {
 			writeMsg := AckMsg(conn.connid, msg.SeqNum)
-			//fmt.Printf("[%d] Send Message (%s) to %s\n",conn.connid,writeMsg,conn.remote.String())
 			s.listener.WriteToUDP(writeMsg, conn.remote)
 			if msg.SeqNum == (receDataCount + 1) {
 				readMsg := readMessage{conn.connid, msg.Payload}
@@ -359,12 +361,10 @@ func mainRoutine(s *server, conn *connection, writeCh writeChannel) {
 		} else if msg.Type == MsgTerminate {
 			terminateFlag = true
 		} else if msg.Type == MsgTicker {
-			//fmt.Printf("[%d] #%d Epoch Ticker...Unacked Message:%d\n",conn.connid,conn.currentEpoch,len(conn.epochMap))
 			if conn.currentEpoch >= conn.lastMsg+s.epochLimit {
 				<-s.connNum
 				conn.sigstp <- 1 //Terminate Time Routine
 				s.readbuf.channel <- readMessage{conn.connid, nil}
-				//fmt.Printf("[%d] Main Routine Terminate...\n",conn.connid)
 				return
 			}
 			if conn.currentEpoch != conn.lastData {
@@ -372,14 +372,13 @@ func mainRoutine(s *server, conn *connection, writeCh writeChannel) {
 				s.listener.WriteToUDP(msg, conn.remote)
 			}
 			for sn, epoch := range conn.epochMap {
-				//fmt.Printf(" --- [%d] Epoch:%d->%d(%d)---\n",conn.connid,epoch.sendEpoch, epoch.backoff, s.maxBackOffInterval)
 				if conn.currentEpoch == epoch.sendEpoch+epoch.backoff {
 					s.listener.WriteToUDP(epoch.content, conn.remote)
-					newBackoff := updateBackoff(epoch.backoff, s.maxBackOffInterval)
+					newBackoff := updateBackoff(epoch.backoff,
+						s.maxBackOffInterval)
 					epoch.backoff = newBackoff
 					delete(conn.epochMap, sn)
 					conn.epochMap[sn] = epoch
-					//fmt.Printf(" --- [%d] Send Message (%s) [Epoch:%d->%d(%d)] [Curr:%d]---\n",conn.connid,epoch.content,epoch.sendEpoch, epoch.backoff, s.maxBackOffInterval, conn.currentEpoch)
 				}
 			}
 			conn.currentEpoch = conn.currentEpoch + 1
@@ -387,6 +386,9 @@ func mainRoutine(s *server, conn *connection, writeCh writeChannel) {
 	}
 }
 
+/* Function UpdateBackoff:
+   An tool function to update the backoff interval
+*/
 func updateBackoff(val int, limit int) int {
 	i := -1.0
 	back := -1
@@ -435,7 +437,6 @@ func (s *server) Read() (int, []byte, error) {
 
 /* Function Write: write messages into writebuf channel*/
 func (s *server) Write(connID int, payload []byte) error {
-	//fmt.Printf("[%d] User write to server:%s\n",connID,payload)
 	value, ok := s.writebuf.buf[connID]
 	if ok {
 		ch := value.channel
@@ -459,7 +460,7 @@ func (s *server) CloseConn(connID int) error {
 }
 
 /* Function Close:
-   1. Send sigstp to read routine, and read routine terminates each main routine
+   1. Send sigstp to read routine, and read routine terminates each mainRoutine
    2. Blocked when routines have not been terminated
    3. Use panic to check whether a routine existed
 */
