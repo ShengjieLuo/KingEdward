@@ -4,9 +4,22 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-
+	"github.com/cmu440/bitcoin"
 	"github.com/cmu440/lsp"
 )
+
+func parseMessage(msg []byte, msgType int)(* bitcoin.Message){
+	result := &bitcoin.Message{0, "", 0, 0, 0, 0}
+	switch msgType{
+	case 0:
+		var s string
+		fmt.Sscanf(string(msg), "[%s %s %d %d]", &s, &result.Data, &result.Lower, &result.Upper)
+	case 1:
+		var s string
+		fmt.Sscanf(string(msg), "[%s %d %d]", &s, &result.Hash, &result.Nonce)
+	}
+	return result
+}
 
 func main() {
 	const numArgs = 4
@@ -33,8 +46,15 @@ func main() {
 	_ = message    // Keep compiler happy. Please remove!
 	_ = maxNonce   // Keep compiler happy. Please remove!
 	// TODO: implement this!
-
-	printResult(0, 0)
+	requestMessge := bitcoin.NewRequest(message, 0, maxNonce)
+	client.Write([]byte(requestMessge.String()))
+	result, err := client.Read()
+	if err != nil{
+		printDisconnected()
+	}
+	newResult := parseMessage(result, 1)
+	printResult(newResult.Hash, newResult.Nonce)
+	return
 }
 
 // printResult prints the final result to stdout.
