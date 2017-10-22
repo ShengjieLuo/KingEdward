@@ -7,8 +7,9 @@ import (
 	"strconv"
 	"flag"
 	"errors"
-	"strings"
+	//"strings"
 	"container/list"
+	"encoding/json"
 
 	"github.com/cmu440/lsp"
 	"github.com/cmu440/bitcoin"
@@ -123,25 +124,16 @@ func readParameter()(int){
 	return port
 }
 
-func extractInfo(s string) *bitcoin.Message {
-	length := strings.Count(s,"")
-	s = s[1:length-2]
-	infos := strings.Split(s," ")
-	m := bitcoin.Message{}
-	switch infos[0]{
-	case "Request":
-		m.Type		= bitcoin.Request
-		m.Data		= infos[1]
-		m.Lower,_	= strconv.ParseUint(infos[2],10, 64)
-		m.Upper,_	= strconv.ParseUint(infos[3],10, 64)
-	case "Result":
-		m.Type		= bitcoin.Result
-		m.Hash,_	= strconv.ParseUint(infos[1],10, 64)
-		m.Nonce,_	= strconv.ParseUint(infos[2],10, 64)
-	case "Join":
-		m.Type		= bitcoin.Join
+func extractInfo(payload []byte) *bitcoin.Message {
+	var msg = new(bitcoin.Message)
+	err := json.Unmarshal(payload,msg)
+	if err!=nil {
+		LOGF.Printf("Error: Message Payload cannot be unmarshalled!\n")
 	}
-	return &m
+	if msg.Data==""&&msg.Upper==0&&msg.Hash==0{
+		LOGF.Printf("Error: Unmarshalled Message is empty")
+        }
+	return msg
 }
 
 func addRequest(srv *server,m *bitcoin.Message,id int ) *Request{
@@ -182,13 +174,14 @@ func scheduleMiner(srv *server, req *Request) {
       miner       := srv.miners[conn.Value.(int)]
       miner.Req    = req.Conn
       miner.Status = INUSE
-      miner.Task   = []byte(m.String())
+      miner.Task,_ = json.Marshal(m)
       srv.lspServer.Write(miner.Conn,miner.Task)
       srv.availMiners.Remove(conn)
     } else{
     //If there is no available miner, then put it into bufferTasks
       m		:= bitcoin.NewRequest(req.Data,uint64(lo),uint64(hi))
-      task	:= Task{req.Conn,[]byte(m.String())}
+      msg,_	:= json.Marshal(m)
+      task	:= Task{req.Conn,msg}
       srv.bufferTasks.PushBack(task)
     }
   }
@@ -222,8 +215,9 @@ func updateRequest(srv *server,m *bitcoin.Message, conn int){
       LOGF.Printf("[%d:%d] Request Connection Has Lost",req.Id,req.Conn)
       return
     }
-    msg := bitcoin.NewResult(resultHash,resultNonce)
-    srv.lspServer.Write(req.Conn,[]byte(msg.String()))
+    m	:= bitcoin.NewResult(resultHash,resultNonce)
+    msg,_ := json.Marshal(m)
+    srv.lspServer.Write(req.Conn,msg)
     srv.availMiners.PushBack(conn)
     delete(srv.requests,req.Conn)
     return
@@ -269,7 +263,7 @@ func readRoutine(srv *server){
       }
     } else {
       LOGF.Printf("[read] Server received '%s' from client %d\n",string(payload),id)
-      m := extractInfo(string(payload))
+      m := extractInfo(payload)
       switch m.Type{
 
       case bitcoin.Request:
@@ -307,12 +301,6 @@ func readRoutine(srv *server){
       }
     }
   }
-}
-
-func extractInfoTest(){
-	s := string("[Request qwertyu 1 15]")
-	m := extractInfo(s)
-	fmt.Printf(m.String())
 }
 
 func main() {
