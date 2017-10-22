@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"encoding/json"
 	"github.com/cmu440/bitcoin"
 	"github.com/cmu440/lsp"
 )
@@ -63,8 +64,13 @@ func main() {
 			break
 		}
 		newRequest := parseMessage(newMsg, 0)
+		if err != nil{
+			fmt.Println("Error Unmarshaling!")
+			return
+		}
 		resHsh, nonce := findMinimalHash(newRequest.Data, newRequest.Lower, newRequest.Upper)
-		miner.Write([] byte(bitcoin.NewResult(resHsh, nonce).String()) )
+		byteRequest, _ := json.Marshal(bitcoin.NewResult(resHsh, nonce))
+		miner.Write(byteRequest)
 	}
 	return
 }

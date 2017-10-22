@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"encoding/json"
 	"strconv"
 	"github.com/cmu440/bitcoin"
 	"github.com/cmu440/lsp"
@@ -43,14 +44,16 @@ func main() {
 
 	defer client.Close()
 
-	_ = message    // Keep compiler happy. Please remove!
-	_ = maxNonce   // Keep compiler happy. Please remove!
+	//_ = message    // Keep compiler happy. Please remove!
+	//_ = maxNonce   // Keep compiler happy. Please remove!
 	// TODO: implement this!
 	requestMessge := bitcoin.NewRequest(message, 0, maxNonce)
-	client.Write([]byte(requestMessge.String()))
+	byteRequest, _ := json.Marshal(requestMessge)
+	client.Write(byteRequest)
 	result, err := client.Read()
 	if err != nil{
 		printDisconnected()
+		return
 	}
 	newResult := parseMessage(result, 1)
 	printResult(newResult.Hash, newResult.Nonce)
