@@ -235,6 +235,7 @@ func (c *client) mainRoutine() {
 		select {
 		// epoch event
 		case <-c.epochFirer.C:
+			fmt.Printf("[lsp] Epoch:%d\n",c.currentEpoch)
 			c.currentEpoch += 1
 			// Still not connected to server
 			if c.connID == -1 {
@@ -248,9 +249,11 @@ func (c *client) mainRoutine() {
 				// Send another connect message
 				c.sendMsg(MsgConnect, 0, nil)
 			} else {
+				fmt.Printf("[lsp] %d-%d <=> %d\n",c.currentEpoch,c.lastMsgEpoch,c.params.EpochLimit)
 				// Slient epoch exceed limit, close
 				if c.currentEpoch-c.lastMsgEpoch >= c.params.EpochLimit {
 					c.beClosed = 3
+					fmt.Printf("[lsp] Server Closed\n")
 					c.closeRead <- 1
 					c.closeEachComponent()
 					return
@@ -279,9 +282,10 @@ func (c *client) mainRoutine() {
 			}
 		// close event
 		case <-c.clientClose:
-			//fmt.Printf("[ClientClose] Set c.beClosed Value\n")
+			fmt.Printf("[ClientClose] Set c.beClosed Value\n")
 			c.beClosed = 1
 			// All data has ack, done
+			fmt.Printf("[lsp] Client Close: %d %d\n",c.writeWindowBase,len(c.writeDataBuffer.data))
 			if c.writeWindowBase > len(c.writeDataBuffer.data) {
 				c.returnToClose()
 				return
@@ -395,6 +399,10 @@ func (c *client) readRoutine() {
 			ack := make([]byte, 1500)
 			n, _, _ := c.conn.ReadFromUDP(ack)
 			ack = ack[0:n]
+			fmt.Printf("[lsp] Receive Message(%d):%s\n",len(ack),ack)
+			if len(ack)==0 {
+				continue
+			}
 			c.readMessageChanel.chanel <- ack
 		}
 	}
@@ -433,6 +441,7 @@ func (c *client) Write(payload []byte) error {
  * Close(): Close all routines after all data has been received and sent
  */
 func (c *client) Close() error {
+	fmt.Printf("[lsp] Close Connection\n")
 	c.clientClose <- 1
 	<-c.closeFinished
 	return nil
