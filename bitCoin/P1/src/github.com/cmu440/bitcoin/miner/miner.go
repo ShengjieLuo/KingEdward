@@ -11,8 +11,10 @@ import (
 // Attempt to connect miner as a client to the server.
 func joinWithServer(hostport string) (lsp.Client, error) {
 	// TODO: implement this!
-	//miner, err := lsp.NewClient(hostport, lsp.NewParams())
-	return lsp.NewClient(hostport, lsp.NewParams())
+	miner, err := lsp.NewClient(hostport, lsp.NewParams())
+	byteRequest, _ := json.Marshal(bitcoin.NewJoin())
+	miner.Write(byteRequest)
+	return miner, err
 }
 
 func findMinimalHash(hsh string, Lower uint64, Upper uint64)(resHsh uint64, nonce uint64){
