@@ -8,7 +8,7 @@ import (
 	"github.com/cmu440/bitcoin"
 	"github.com/cmu440/lsp"
 )
-
+/*
 func parseMessage(msg []byte, msgType int)(* bitcoin.Message){
 	result := &bitcoin.Message{0, "", 0, 0, 0, 0}
 	switch msgType{
@@ -20,7 +20,7 @@ func parseMessage(msg []byte, msgType int)(* bitcoin.Message){
 		fmt.Sscanf(string(msg), "[%s %d %d]", &s, &result.Hash, &result.Nonce)
 	}
 	return result
-}
+}*/
 
 func main() {
 	const numArgs = 4
@@ -50,13 +50,16 @@ func main() {
 	requestMessge := bitcoin.NewRequest(message, 0, maxNonce)
 	byteRequest, _ := json.Marshal(requestMessge)
 	client.Write(byteRequest)
-	result, err := client.Read()
+	byteResult, err := client.Read()
 	if err != nil{
 		printDisconnected()
 		return
 	}
-	newResult := parseMessage(result, 1)
-	printResult(newResult.Hash, newResult.Nonce)
+	var result = new(bitcoin.Message)
+	json.Unmarshal(byteResult, result)
+	printResult(result.Hash, result.Nonce)
+	//newResult := parseMessage(result, 1)
+	//printResult(newResult.Hash, newResult.Nonce)
 	return
 }
 

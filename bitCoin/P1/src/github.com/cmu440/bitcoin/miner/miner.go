@@ -63,11 +63,8 @@ func main() {
 		if err != nil{
 			break
 		}
-		newRequest := parseMessage(newMsg, 0)
-		if err != nil{
-			fmt.Println("Error Unmarshaling!")
-			return
-		}
+		var newRequest = new(bitcoin.Message)
+		json.Unmarshal(newMsg, newRequest)
 		resHsh, nonce := findMinimalHash(newRequest.Data, newRequest.Lower, newRequest.Upper)
 		byteRequest, _ := json.Marshal(bitcoin.NewResult(resHsh, nonce))
 		miner.Write(byteRequest)
