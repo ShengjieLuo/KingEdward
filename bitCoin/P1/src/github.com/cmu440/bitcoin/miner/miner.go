@@ -15,19 +15,6 @@ func joinWithServer(hostport string) (lsp.Client, error) {
 	return lsp.NewClient(hostport, lsp.NewParams())
 }
 
-func parseMessage(msg []byte, msgType int)(* bitcoin.Message){
-	result := &bitcoin.Message{0, "", 0, 0, 0, 0}
-	switch msgType{
-	case 0:
-		var s string
-		fmt.Sscanf(string(msg), "[%s %s %d %d]", &s, &result.Data, &result.Lower, &result.Upper)
-	case 1:
-		var s string
-		fmt.Sscanf(string(msg), "[%s %d %d]", &s, &result.Hash, &result.Nonce)
-	}
-	return result
-}
-
 func findMinimalHash(hsh string, Lower uint64, Upper uint64)(resHsh uint64, nonce uint64){
 	resHsh = bitcoin.Hash(hsh, Lower)
 	nonce = Lower

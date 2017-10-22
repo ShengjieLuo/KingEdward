@@ -175,6 +175,7 @@ func scheduleMiner(srv *server, req *Request) {
       miner.Req    = req.Conn
       miner.Status = INUSE
       miner.Task,_ = json.Marshal(m)
+      fmt.Printf("[%d:%d] Task (%d,%d)Sceduled Available Miner:(%d,%d)\n",req.Id,req.Conn,lo,hi,miner.Id,miner.Conn)
       srv.lspServer.Write(miner.Conn,miner.Task)
       srv.availMiners.Remove(conn)
     } else{
@@ -182,6 +183,7 @@ func scheduleMiner(srv *server, req *Request) {
       m		:= bitcoin.NewRequest(req.Data,uint64(lo),uint64(hi))
       msg,_	:= json.Marshal(m)
       task	:= Task{req.Conn,msg}
+      fmt.Printf("[%d:%d] Task (%d,%d)Sceduled into Buffer Task Queue\n",req.Id,req.Conn,lo,hi)
       srv.bufferTasks.PushBack(task)
     }
   }
@@ -236,6 +238,7 @@ func judgeLoss(srv *server,conn int) int {
 
 func readRoutine(srv *server){
   for{
+    fmt.Printf("[read] Server Waiting for msg...\n")
     if id,payload,err := srv.lspServer.Read();err!=nil{
       LOGF.Printf("[read] Client %d has died: %s\n",id,err)
       switch judgeLoss(srv,id){
@@ -264,6 +267,7 @@ func readRoutine(srv *server){
     } else {
       LOGF.Printf("[read] Server received '%s' from client %d\n",string(payload),id)
       m := extractInfo(payload)
+      fmt.Printf("[read] Receive Message "+m.String()+"\n")
       switch m.Type{
 
       case bitcoin.Request:

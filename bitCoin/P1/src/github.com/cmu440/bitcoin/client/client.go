@@ -7,22 +7,32 @@ import (
 	"strconv"
 	"github.com/cmu440/bitcoin"
 	"github.com/cmu440/lsp"
+	"log"
+	"time"
 )
-/*
-func parseMessage(msg []byte, msgType int)(* bitcoin.Message){
-	result := &bitcoin.Message{0, "", 0, 0, 0, 0}
-	switch msgType{
-	case 0:
-		var s string
-		fmt.Sscanf(string(msg), "[%s %s %d %d]", &s, &result.Data, &result.Lower, &result.Upper)
-	case 1:
-		var s string
-		fmt.Sscanf(string(msg), "[%s %d %d]", &s, &result.Hash, &result.Nonce)
-	}
-	return result
-}*/
+
+
+var LOGF *log.Logger
+
+func initLogger()(*log.Logger){
+        const (
+                flag = os.O_RDWR | os.O_CREATE
+                perm = os.FileMode(0666)
+        )
+	now  := time.Now()
+        name := "logClient_"+strconv.FormatInt(now.Unix(),10)+".txt"
+        file, err := os.OpenFile(name, flag, perm)
+        if err != nil {
+                return nil
+        }
+        defer file.Close()
+        return log.New(file, "", log.Lshortfile|log.Lmicroseconds)
+}
 
 func main() {
+	LOGF = initLogger()
+	LOGF.Printf("[Client] Begin Execution\n")
+	fmt.Printf("[Client] Begin Execution\n")
 	const numArgs = 4
 	if len(os.Args) != numArgs {
 		fmt.Printf("Usage: ./%s <hostport> <message> <maxNonce>", os.Args[0])
@@ -44,18 +54,17 @@ func main() {
 
 	defer client.Close()
 
-	//_ = message    // Keep compiler happy. Please remove!
-	//_ = maxNonce   // Keep compiler happy. Please remove!
-	// TODO: implement this!
 	requestMessge := bitcoin.NewRequest(message, 0, maxNonce)
 	byteRequest, _ := json.Marshal(requestMessge)
 	client.Write(byteRequest)
 	byteResult, err := client.Read()
 	if err != nil{
+		LOGF.Printf("[Read] Logf Read Error and Exit now!\n")
 		printDisconnected()
 		return
 	}
 	var result = new(bitcoin.Message)
+	LOGF.Printf("[Result] "+ result.String()+"\n")
 	json.Unmarshal(byteResult, result)
 	printResult(result.Hash, result.Nonce)
 	//newResult := parseMessage(result, 1)
