@@ -44,13 +44,11 @@ func main() {
 		return
 	}
 
-	defer miner.Close()
 
-	// TODO: implement this!
 	for{
 		newMsg, err := miner.Read()
 		if err != nil{
-			break
+			return
 		}
 		var newRequest = new(bitcoin.Message)
 		json.Unmarshal(newMsg, newRequest)
@@ -58,5 +56,6 @@ func main() {
 		byteRequest, _ := json.Marshal(bitcoin.NewResult(resHsh, nonce))
 		miner.Write(byteRequest)
 	}
+	miner.Close()
 	return
 }

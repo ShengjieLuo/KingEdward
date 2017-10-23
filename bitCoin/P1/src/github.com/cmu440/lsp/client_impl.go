@@ -169,6 +169,7 @@ func (c *client) sendMsg(tp MsgType, seqNum int, payload []byte) {
 	}
 	// Send generated message
 	msg, _ := json.Marshal(*data)
+        fmt.Printf("[lsp] Send Message(%d):%s\n",len(msg),msg)
 	c.conn.Write(msg)
 }
 
@@ -235,7 +236,7 @@ func (c *client) mainRoutine() {
 		select {
 		// epoch event
 		case <-c.epochFirer.C:
-			fmt.Printf("[lsp] Epoch:%d\n",c.currentEpoch)
+			//fmt.Printf("[lsp] Epoch:%d\n",c.currentEpoch)
 			c.currentEpoch += 1
 			// Still not connected to server
 			if c.connID == -1 {
@@ -253,12 +254,13 @@ func (c *client) mainRoutine() {
 				// Slient epoch exceed limit, close
 				if c.currentEpoch-c.lastMsgEpoch >= c.params.EpochLimit {
 					c.beClosed = 3
-					fmt.Printf("[lsp] Server Closed\n")
+					//fmt.Printf("[lsp] Server Closed\n")
 					c.closeRead <- 1
 					c.closeEachComponent()
 					return
 				}
 				// No data from server ever, send ACK(0)
+				fmt.Printf("[lsp] c.readSeqNum in current epoch:%d\n",c.readSeqNum)
 				if c.readSeqNum == -1 {
 					c.sendMsg(MsgAck, 0, nil)
 				}
@@ -282,10 +284,10 @@ func (c *client) mainRoutine() {
 			}
 		// close event
 		case <-c.clientClose:
-			fmt.Printf("[ClientClose] Set c.beClosed Value\n")
+			//fmt.Printf("[ClientClose] Set c.beClosed Value\n")
 			c.beClosed = 1
 			// All data has ack, done
-			fmt.Printf("[lsp] Client Close: %d %d\n",c.writeWindowBase,len(c.writeDataBuffer.data))
+			//fmt.Printf("[lsp] Client Close: %d %d\n",c.writeWindowBase,len(c.writeDataBuffer.data))
 			if c.writeWindowBase > len(c.writeDataBuffer.data) {
 				c.returnToClose()
 				return
