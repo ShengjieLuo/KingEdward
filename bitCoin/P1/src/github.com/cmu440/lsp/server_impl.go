@@ -46,13 +46,14 @@ import (
 const (
 	readChannelCapacity  = 10000
 	writeChannelCapacity = 10000
-	maxConnectionNumber  = 10000
+	terminateMsgCapacity = 10000
 	connChannelCapacity  = 2000
 	networkType          = "udp"
 	MsgWriteCall         = -1
 	MsgTerminate         = -2
 	MsgDestroy           = -3
 	MsgTicker            = -4
+	TerminateFlag        = 1
 )
 
 //Data Structure Definition2: Sub-elements of server struct
@@ -107,7 +108,7 @@ type connection struct {
    3. writebuf: pass the message from write to mainroutine
    4. readbuf : pass the message from mainroutine to read
    5. chanmap : store the connection between client and server
-   6. connNum : a channel used to monitor live connections
+   6. sigmsg  : a channel used to monitor connection status
    7. sigstp  : a channel used to accept stop signal from user
    8. sigter  : a channel used to accept terminate signal
    9. sigclo  : a channel used to accept close signal
@@ -122,9 +123,8 @@ type server struct {
 	writebuf           writeBuffer
 	readbuf            readBuffer
 	chanmap            map[int]connection
-	connNum            chan int
+	sigmsg             chan int
 	sigstp             chan int
-	sigter             chan int
 	sigclo             chan int
 	listener           *lspnet.UDPConn
 }
@@ -142,10 +142,12 @@ func NewServer(port int, params *Params) (Server, error) {
 	buf := make(map[int]writeChannel)
 	writebuf := writeBuffer{buf}
 	chanmaps := make(map[int]connection)
-	connNum := make(chan int, maxConnectionNumber)
+	//Send Terminate Message from Server to Connections
+	sigmsg := make(chan int, terminateMsgCapacity)
+	//Send Stop Message from Connection to Routine
 	sigstp := make(chan int, 1)
-	sigter := make(chan int, 100)
-	sigclo := make(chan int, 100)
+	//Send close Meessage from close() to Server
+	sigclo := make(chan int, 1)
 	addr, _ := lspnet.ResolveUDPAddr(networkType, ":"+strconv.Itoa(port))
 	listener, err := lspnet.ListenUDP(networkType, addr)
 	if err != nil {
@@ -154,42 +156,10 @@ func NewServer(port int, params *Params) (Server, error) {
 	}
 	newserver := server{port, params.EpochLimit, params.EpochMillis,
 		params.WindowSize, params.MaxBackOffInterval, writebuf, readbuf,
-		chanmaps, connNum, sigstp, sigter, sigclo, listener}
+		chanmaps, sigmsg, sigstp, sigclo, listener}
 	newServer = &newserver
 	go readRoutine(&newserver)
 	return newServer, nil
-}
-
-/* Function2: TerminateRoutine
- * 1. The specific routine to terminate server only
- * 2. Begin when Close() function is called
- * 3. End when all routines are terminated
- */
-func terminateRoutine(s *server) {
-	waitFlag := false
-	for waitFlag == false {
-		select {
-		case <-s.sigstp:
-			msg := Message{MsgTerminate, 0, 0, 0, nil}
-			for i := 1; i <= len(s.chanmap); i++ {
-				s.chanmap[i].channel <- msg
-			}
-			waitFlag = true
-			break
-		default:
-		}
-	}
-	for {
-		select {
-		case <-s.connNum:
-			s.connNum <- 1
-			time.Sleep(time.Millisecond * 10)
-		default:
-			s.sigclo <- 1
-			return
-		}
-	}
-	return
 }
 
 /* Function3: Read Routine
@@ -243,8 +213,8 @@ func readRoutine(s *server) {
 				connSigstp, connSigter, connEpochMap, 0, -1, -1}
 			s.chanmap[connid] = newConnection
 			newConnection.channel <- *msg
-			s.connNum <- 1 //Count Connection Main Routine
-			s.connNum <- 1 //Count Connection Time Routine
+			s.sigmsg <- 1 //Pass msg from main routine
+			s.sigmsg <- 1 //Pass msg from count routine
 			ch := make(chan []byte, writeChannelCapacity)
 			writeCh := writeChannel{ch}
 			s.writebuf.buf[connid] = writeCh
@@ -266,7 +236,7 @@ func timeRoutine(s *server, conn *connection) {
 		conn.channel <- msg
 		select {
 		case <-conn.sigstp:
-			<-s.connNum
+			<-s.sigmsg
 			return
 		default:
 		}
@@ -300,7 +270,7 @@ func mainRoutine(s *server, conn *connection, writeCh writeChannel) {
 			default:
 				flag = false
 				if terminateFlag && sendDataCount == receAckCount {
-					<-s.connNum
+					<-s.sigmsg
 					conn.sigstp <- 1
 					return
 				}
@@ -363,7 +333,7 @@ func mainRoutine(s *server, conn *connection, writeCh writeChannel) {
 			terminateFlag = true
 		} else if msg.Type == MsgTicker {
 			if conn.currentEpoch >= conn.lastMsg+s.epochLimit {
-				<-s.connNum
+				<-s.sigmsg
 				conn.sigstp <- 1 //Terminate Time Routine
 				s.readbuf.channel <- readMessage{conn.connid, nil}
 				return
@@ -408,6 +378,31 @@ func updateBackoff(val int, limit int) int {
 			}
 		}
 	}
+}
+
+/* Function TerminateRoutine:
+ * 1. The specific function to terminate server only
+ * 2. Begin when Close() function is called
+ * 3. End when all routines are terminated
+ */
+func terminate(s *server) {
+	<-s.sigstp
+	msg := Message{MsgTerminate, 0, 0, 0, nil}
+	for i := 1; i <= len(s.chanmap); i++ {
+		s.chanmap[i].channel <- msg
+	}
+	for {
+		select {
+		//Send TerminateFlag to sigmsg (to connections)
+		case <-s.sigmsg:
+			s.sigmsg <- TerminateFlag
+			time.Sleep(time.Millisecond * 10)
+		default:
+			s.sigclo <- 1
+			return
+		}
+	}
+	return
 }
 
 /* Fuction AckMsg: Generate the Ack Type message from given parameter*/
@@ -468,7 +463,7 @@ func (s *server) CloseConn(connID int) error {
 func (s *server) Close() error {
 	//fmt.Printf("~~~~ Begin server.Close() ~~~~\n")
 	s.sigstp <- 1
-	go terminateRoutine(s)
+	go terminate(s)
 	time.Sleep(time.Millisecond * 10)
 	for {
 		select {

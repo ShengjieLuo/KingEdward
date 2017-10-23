@@ -86,20 +86,20 @@ type epochInfo struct {
    21. readDataReceived: received out of order server data
 */
 type client struct {
-	params        *Params
-	conn          *lspnet.UDPConn
-	addr          *lspnet.UDPAddr
-	connID        int
-	connResult    chan int
-	clientClose   chan int
-	closeEachComp chan int
-	closeFinished chan int
-	closeRead     chan int
-	beClosed      int
-	lastMsgEpoch  int
-	currentEpoch  int
-	receivedLastEpoch	int
-	epochFirer    *time.Ticker
+	params            *Params
+	conn              *lspnet.UDPConn
+	addr              *lspnet.UDPAddr
+	connID            int
+	connResult        chan int
+	clientClose       chan int
+	closeEachComp     chan int
+	closeFinished     chan int
+	closeRead         chan int
+	beClosed          int
+	lastMsgEpoch      int
+	currentEpoch      int
+	receivedLastEpoch int
+	epochFirer        *time.Ticker
 
 	writeDataChanel  dataChanel
 	writeDataBuffer  dataSendBuffer
@@ -170,7 +170,7 @@ func (c *client) sendMsg(tp MsgType, seqNum int, payload []byte) {
 	}
 	// Send generated message
 	msg, _ := json.Marshal(*data)
-        //fmt.Printf("[lsp] Send Message(%d):%s\n",len(msg),msg)
+	//fmt.Printf("[lsp] Send Message(%d):%s\n",len(msg),msg)
 	c.conn.Write(msg)
 }
 
@@ -262,7 +262,7 @@ func (c *client) mainRoutine() {
 				}
 				// No data from server ever, send ACK(0)
 				//fmt.Printf("[lsp] c.readSeqNum in current epoch:%d\n",c.readSeqNum)
-				if c.readSeqNum == -1 || c.receivedLastEpoch == 0{
+				if c.readSeqNum == -1 || c.receivedLastEpoch == 0 {
 					c.sendMsg(MsgAck, 0, nil)
 				}
 				c.receivedLastEpoch = 0
@@ -405,7 +405,7 @@ func (c *client) readRoutine() {
 			n, _, _ := c.conn.ReadFromUDP(ack)
 			ack = ack[0:n]
 			//fmt.Printf("[lsp] Receive Message(%d):%s\n",len(ack),ack)
-			if len(ack)==0 {
+			if len(ack) == 0 {
 				continue
 			}
 			c.readMessageChanel.chanel <- ack

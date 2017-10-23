@@ -1,11 +1,11 @@
 package main
 
 import (
-	"fmt"
-	"os"
 	"encoding/json"
+	"fmt"
 	"github.com/cmu440/bitcoin"
 	"github.com/cmu440/lsp"
+	"os"
 )
 
 // Attempt to connect miner as a client to the server.
@@ -17,12 +17,12 @@ func joinWithServer(hostport string) (lsp.Client, error) {
 	return miner, err
 }
 
-func findMinimalHash(hsh string, Lower uint64, Upper uint64)(resHsh uint64, nonce uint64){
+func findMinimalHash(hsh string, Lower uint64, Upper uint64) (resHsh uint64, nonce uint64) {
 	resHsh = bitcoin.Hash(hsh, Lower)
 	nonce = Lower
-	for i := Lower + 1; i <= Upper; i++{
+	for i := Lower + 1; i <= Upper; i++ {
 		t := bitcoin.Hash(hsh, i)
-		if t < resHsh{
+		if t < resHsh {
 			resHsh = t
 			nonce = i
 		}
@@ -44,10 +44,9 @@ func main() {
 		return
 	}
 
-
-	for{
+	for {
 		newMsg, err := miner.Read()
-		if err != nil{
+		if err != nil {
 			return
 		}
 		var newRequest = new(bitcoin.Message)

@@ -5,7 +5,7 @@
  **Intorduction:                                                 **
  **1. Build upon the LSP protocol( client end).                  **
  **2. Implementation the client which send jobs to server and    **
- **   output result. 										     ** 
+ **   output result. 						 **
  ******************************************************************
  **Author:                                                       **
  ** Shengjie Luo shengjil@andrew.cmu.edu                         **
@@ -15,12 +15,12 @@
 package main
 
 import (
-	"fmt"
-	"os"
 	"encoding/json"
-	"strconv"
+	"fmt"
 	"github.com/cmu440/bitcoin"
 	"github.com/cmu440/lsp"
+	"os"
+	"strconv"
 )
 
 func main() {
@@ -47,17 +47,14 @@ func main() {
 	// New request message
 	requestMessge := bitcoin.NewRequest(message, 0, maxNonce)
 	byteRequest, _ := json.Marshal(requestMessge) // Marshal msg
-	client.Write(byteRequest) // Send msg
-	//fmt.Printf("[Client] Wait for Result...\n")
-	byteResult, err := client.Read() // Wait for response
+	client.Write(byteRequest)                     // Send msg
+	byteResult, err := client.Read()              // Wait for response
 	// Server closed
-	if err != nil{
-		//fmt.Printf("[Read] Logf Read Error and Exit now!\n")
+	if err != nil {
 		printDisconnected()
 	} else {
 		// Unmarshal result
 		var result = new(bitcoin.Message)
-		//fmt.Printf("[Result] "+ result.String()+"\n")
 		json.Unmarshal(byteResult, result)
 		// Output
 		printResult(result.Hash, result.Nonce)
