@@ -32,7 +32,7 @@ func initLogger()(*log.Logger){
 func main() {
 	LOGF = initLogger()
 	LOGF.Printf("[Client] Begin Execution\n")
-	fmt.Printf("[Client] Begin Execution\n")
+	//fmt.Printf("[Client] Begin Execution\n")
 	const numArgs = 4
 	if len(os.Args) != numArgs {
 		fmt.Printf("Usage: ./%s <hostport> <message> <maxNonce>", os.Args[0])
@@ -41,6 +41,7 @@ func main() {
 	hostport := os.Args[1]
 	message := os.Args[2]
 	maxNonce, err := strconv.ParseUint(os.Args[3], 10, 64)
+        fmt.Printf("[Client] Message:%s Nonce:%d \n",message,maxNonce)
 	if err != nil {
 		fmt.Printf("%s is not a number.\n", os.Args[3])
 		return
@@ -56,14 +57,14 @@ func main() {
 	requestMessge := bitcoin.NewRequest(message, 0, maxNonce)
 	byteRequest, _ := json.Marshal(requestMessge)
 	client.Write(byteRequest)
-	fmt.Printf("[Client] Wait for Result...\n")
+	//fmt.Printf("[Client] Wait for Result...\n")
 	byteResult, err := client.Read()
 	if err != nil{
-		fmt.Printf("[Read] Logf Read Error and Exit now!\n")
+		//fmt.Printf("[Read] Logf Read Error and Exit now!\n")
 		printDisconnected()
 	} else {
 		var result = new(bitcoin.Message)
-		fmt.Printf("[Result] "+ result.String()+"\n")
+		//fmt.Printf("[Result] "+ result.String()+"\n")
 		json.Unmarshal(byteResult, result)
 		printResult(result.Hash, result.Nonce)
 		client.Close()

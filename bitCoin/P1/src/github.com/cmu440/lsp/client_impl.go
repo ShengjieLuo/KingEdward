@@ -170,7 +170,7 @@ func (c *client) sendMsg(tp MsgType, seqNum int, payload []byte) {
 	}
 	// Send generated message
 	msg, _ := json.Marshal(*data)
-        fmt.Printf("[lsp] Send Message(%d):%s\n",len(msg),msg)
+        //fmt.Printf("[lsp] Send Message(%d):%s\n",len(msg),msg)
 	c.conn.Write(msg)
 }
 
@@ -251,7 +251,7 @@ func (c *client) mainRoutine() {
 				// Send another connect message
 				c.sendMsg(MsgConnect, 0, nil)
 			} else {
-				fmt.Printf("[lsp] %d-%d <=> %d\n",c.currentEpoch,c.lastMsgEpoch,c.params.EpochLimit)
+				//fmt.Printf("[lsp] %d-%d <=> %d\n",c.currentEpoch,c.lastMsgEpoch,c.params.EpochLimit)
 				// Slient epoch exceed limit, close
 				if c.currentEpoch-c.lastMsgEpoch >= c.params.EpochLimit {
 					c.beClosed = 3
@@ -261,7 +261,7 @@ func (c *client) mainRoutine() {
 					return
 				}
 				// No data from server ever, send ACK(0)
-				fmt.Printf("[lsp] c.readSeqNum in current epoch:%d\n",c.readSeqNum)
+				//fmt.Printf("[lsp] c.readSeqNum in current epoch:%d\n",c.readSeqNum)
 				if c.readSeqNum == -1 || c.receivedLastEpoch == 0{
 					c.sendMsg(MsgAck, 0, nil)
 				}
@@ -404,7 +404,7 @@ func (c *client) readRoutine() {
 			ack := make([]byte, 1500)
 			n, _, _ := c.conn.ReadFromUDP(ack)
 			ack = ack[0:n]
-			fmt.Printf("[lsp] Receive Message(%d):%s\n",len(ack),ack)
+			//fmt.Printf("[lsp] Receive Message(%d):%s\n",len(ack),ack)
 			if len(ack)==0 {
 				continue
 			}
@@ -446,7 +446,7 @@ func (c *client) Write(payload []byte) error {
  * Close(): Close all routines after all data has been received and sent
  */
 func (c *client) Close() error {
-	fmt.Printf("[lsp] Close Connection\n")
+	//fmt.Printf("[lsp] Close Connection\n")
 	c.clientClose <- 1
 	<-c.closeFinished
 	return nil

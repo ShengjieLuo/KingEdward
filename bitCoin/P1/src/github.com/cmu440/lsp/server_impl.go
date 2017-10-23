@@ -208,7 +208,7 @@ func readRoutine(s *server) {
 			fmt.Errorf("Cannot read from connection: %v\n", err)
 		}
 		data := readContent[0:n]
-		fmt.Printf("[server] Receive Message:%s\n",data)
+		//fmt.Printf("[server] Receive Message:%s\n",data)
 		var msg = new(Message)
 		err = json.Unmarshal(data, msg)
 		if err != nil {
