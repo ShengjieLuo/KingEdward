@@ -52,23 +52,22 @@ func main() {
 		return
 	}
 
-	defer client.Close()
 
 	requestMessge := bitcoin.NewRequest(message, 0, maxNonce)
 	byteRequest, _ := json.Marshal(requestMessge)
 	client.Write(byteRequest)
+	fmt.Printf("[Client] Wait for Result...\n")
 	byteResult, err := client.Read()
 	if err != nil{
-		LOGF.Printf("[Read] Logf Read Error and Exit now!\n")
+		fmt.Printf("[Read] Logf Read Error and Exit now!\n")
 		printDisconnected()
-		return
+	} else {
+		var result = new(bitcoin.Message)
+		fmt.Printf("[Result] "+ result.String()+"\n")
+		json.Unmarshal(byteResult, result)
+		printResult(result.Hash, result.Nonce)
+		client.Close()
 	}
-	var result = new(bitcoin.Message)
-	LOGF.Printf("[Result] "+ result.String()+"\n")
-	json.Unmarshal(byteResult, result)
-	printResult(result.Hash, result.Nonce)
-	//newResult := parseMessage(result, 1)
-	//printResult(newResult.Hash, newResult.Nonce)
 	return
 }
 

@@ -20,6 +20,7 @@ const (
 	INUSE     = 0
         MINER     = 0
         REQUEST   = 1
+	taskPerWorker = 30
 )
 
 var (
@@ -137,8 +138,16 @@ func extractInfo(payload []byte) *bitcoin.Message {
 }
 
 func addRequest(srv *server,m *bitcoin.Message,id int ) *Request{
+        //1. Initialize req.worker
 	workers := make(map[int]Result)
-	req := Request{srv.reqCount,m.Data,m.Lower,m.Upper,id,-1,-1,workers}
+        //2. Initialize req.totalunits
+	taskCount := int(m.Upper - m.Lower + 1)
+	workersCount := taskCount/taskPerWorker
+	if taskCount- taskPerWorker*workersCount > 0 {
+		workersCount = workersCount + 1
+	}
+        //3. Initialize other parts of req and put it into requests map
+	req := Request{srv.reqCount,m.Data,m.Lower,m.Upper,id,workersCount,0,workers}
 	srv.requests[req.Conn] = req
 	srv.reqCount = srv.reqCount + 1
 	return &req
@@ -153,18 +162,12 @@ func addMiner(srv *server, id int){
 
 func scheduleMiner(srv *server, req *Request) {
   minersCount := srv.availMiners.Len()
-  const taskPerWorker = 30
-  taskCount := int(req.Upper - req.Lower + 1)
-  workersCount := taskCount/taskPerWorker
-  if taskCount- taskPerWorker*workersCount > 0 {
-    workersCount = workersCount + 1
-  }
   var i int
-  for i=0;i<workersCount;i++ {
+  for i=0;i<req.totalUnits;i++ {
     //Calculate the task range first
     lo := int(req.Lower) + i * taskPerWorker
     hi := int(req.Lower) + (i+1) * taskPerWorker
-    if i==workersCount-1{
+    if i==req.totalUnits-1{
       hi = int(req.Upper) + 1
     }
     //If there is available miner, then use it as worker
@@ -175,6 +178,7 @@ func scheduleMiner(srv *server, req *Request) {
       miner.Req    = req.Conn
       miner.Status = INUSE
       miner.Task,_ = json.Marshal(m)
+      srv.miners[conn.Value.(int)] = miner
       fmt.Printf("[%d:%d] Task (%d,%d)Sceduled Available Miner:(%d,%d)\n",req.Id,req.Conn,lo,hi,miner.Id,miner.Conn)
       srv.lspServer.Write(miner.Conn,miner.Task)
       srv.availMiners.Remove(conn)
@@ -195,15 +199,21 @@ func scheduleMiner(srv *server, req *Request) {
 func updateRequest(srv *server,m *bitcoin.Message, conn int){
   miner := srv.miners[conn]
   req   := srv.requests[miner.Req]
+  tmp := miner.Req
   miner.Req = -1
   miner.Status = AVAILABLE
   miner.Task = nil
+  req.workers[req.finishUnits] = Result{m.Hash,m.Nonce}
   req.finishUnits = req.finishUnits + 1
-  req.workers[conn] = Result{m.Hash,m.Nonce}
+  fmt.Printf("[update] Miner(%d:%d) send a result to Request(%d:%d)[%d,%d]\n",miner.Id,miner.Conn,req.Id,req.Conn,req.finishUnits,req.totalUnits)
+  srv.miners[conn] = miner
+  srv.requests[tmp] = req
+  srv.availMiners.PushBack(conn)
   var resultHash uint64
   var resultNonce uint64
   if req.finishUnits==req.totalUnits {
     for _, v := range req.workers {
+      //fmt.Printf("[Result] Result (%s,%s) of Request (%d,%d)\n",strconv.FormatUint(v.Hash,10),strconv.FormatUint(v.Nonce,10),req.Id,req.Conn)
       if resultHash==0 {
         resultHash = v.Hash
         resultNonce = v.Nonce
@@ -212,6 +222,7 @@ func updateRequest(srv *server,m *bitcoin.Message, conn int){
         resultNonce = v.Nonce
       }
     }
+    fmt.Printf("[Result] Return result (%s,%s) to client (%d,%d)\n",strconv.FormatUint(resultHash,10),strconv.FormatUint(resultNonce,10),req.Id,req.Conn)
     _,ok := srv.requests[req.Conn]
     if !ok {
       LOGF.Printf("[%d:%d] Request Connection Has Lost",req.Id,req.Conn)
@@ -219,8 +230,8 @@ func updateRequest(srv *server,m *bitcoin.Message, conn int){
     }
     m	:= bitcoin.NewResult(resultHash,resultNonce)
     msg,_ := json.Marshal(m)
+    fmt.Printf("[Result] Write to Request Client:%s\n",msg)
     srv.lspServer.Write(req.Conn,msg)
-    srv.availMiners.PushBack(conn)
     delete(srv.requests,req.Conn)
     return
   }
@@ -243,7 +254,7 @@ func readRoutine(srv *server){
       LOGF.Printf("[read] Client %d has died: %s\n",id,err)
       switch judgeLoss(srv,id){
       case MINER:
-        LOGF.Printf("[%d] Miner Connection Lost",id)
+        fmt.Printf("[%d] Miner Connection Lost\n",id)
         miner := srv.miners[id]
         delete(srv.miners,id)
         flag := true
@@ -261,7 +272,7 @@ func readRoutine(srv *server){
 	  srv.bufferTasks.PushBack(task)
         }
       case REQUEST:
-	LOGF.Printf("[%d] Request Connection Lost",id)
+	fmt.Printf("[%d] Request Connection Lost\n",id)
         delete(srv.requests,id)
       }
     } else {
@@ -280,9 +291,10 @@ func readRoutine(srv *server){
         addMiner(srv,id)
 
       case bitcoin.Result:
-        LOGF.Printf("[%d] Server begin dealing REQUEST message\n",id)
+        LOGF.Printf("[%d] Server begin dealing RESULT message\n",id)
 	updateRequest(srv,m,id)
         for srv.availMiners.Len() > 0 {
+          fmt.Printf("[server] Server bufferTask Number:%d\n",srv.bufferTasks.Len())
           if (srv.bufferTasks.Len()!=0){
             //1. Fetch the task from bufferTasks
             taskele := srv.bufferTasks.Front()
@@ -294,8 +306,10 @@ func readRoutine(srv *server){
             miner.Req	 = task.Req
             miner.Status = INUSE
             miner.Task   = task.Msg
+            srv.miners[conn.Value.(int)] = miner
             srv.lspServer.Write(miner.Conn,miner.Task)
             srv.availMiners.Remove(conn)
+          } else {
             break
           }
         }
