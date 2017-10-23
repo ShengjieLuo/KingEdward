@@ -98,7 +98,7 @@ type client struct {
 	beClosed      int
 	lastMsgEpoch  int
 	currentEpoch  int
-	receivedLastEpoch int
+	receivedLastEpoch	int
 	epochFirer    *time.Ticker
 
 	writeDataChanel  dataChanel
@@ -123,7 +123,7 @@ func NewClient(hostport string, params *Params) (*client, error) {
 		&lspnet.UDPConn{}, &lspnet.UDPAddr{}, -1,
 		make(chan int), make(chan int), make(chan int),
 		make(chan int), make(chan int),
-		0, 0, 0, 0
+		0, 0, 0, 0,
 		time.NewTicker(time.Duration(params.EpochMillis) * time.Millisecond),
 		dataChanel{make(chan []byte, maxDataChanel)},
 		dataSendBuffer{make([]([]byte), 0, maxPendingData)},
@@ -170,6 +170,7 @@ func (c *client) sendMsg(tp MsgType, seqNum int, payload []byte) {
 	}
 	// Send generated message
 	msg, _ := json.Marshal(*data)
+        fmt.Printf("[lsp] Send Message(%d):%s\n",len(msg),msg)
 	c.conn.Write(msg)
 }
 
@@ -236,6 +237,7 @@ func (c *client) mainRoutine() {
 		select {
 		// epoch event
 		case <-c.epochFirer.C:
+			//fmt.Printf("[lsp] Epoch:%d\n",c.currentEpoch)
 			c.currentEpoch += 1
 			// Still not connected to server
 			if c.connID == -1 {
@@ -249,18 +251,21 @@ func (c *client) mainRoutine() {
 				// Send another connect message
 				c.sendMsg(MsgConnect, 0, nil)
 			} else {
+				fmt.Printf("[lsp] %d-%d <=> %d\n",c.currentEpoch,c.lastMsgEpoch,c.params.EpochLimit)
 				// Slient epoch exceed limit, close
 				if c.currentEpoch-c.lastMsgEpoch >= c.params.EpochLimit {
 					c.beClosed = 3
+					//fmt.Printf("[lsp] Server Closed\n")
 					c.closeRead <- 1
 					c.closeEachComponent()
 					return
 				}
 				// No data from server ever, send ACK(0)
+				fmt.Printf("[lsp] c.readSeqNum in current epoch:%d\n",c.readSeqNum)
 				if c.readSeqNum == -1 || c.receivedLastEpoch == 0{
 					c.sendMsg(MsgAck, 0, nil)
 				}
-				c.receivedLastEpoch = 0 
+				c.receivedLastEpoch = 0
 				// Check each on fly message and re-send if needed
 				for seqNum, epInfo := range c.writeOnFly {
 					// Reach limit, resend
@@ -284,6 +289,7 @@ func (c *client) mainRoutine() {
 			//fmt.Printf("[ClientClose] Set c.beClosed Value\n")
 			c.beClosed = 1
 			// All data has ack, done
+			//fmt.Printf("[lsp] Client Close: %d %d\n",c.writeWindowBase,len(c.writeDataBuffer.data))
 			if c.writeWindowBase > len(c.writeDataBuffer.data) {
 				c.returnToClose()
 				return
@@ -398,6 +404,10 @@ func (c *client) readRoutine() {
 			ack := make([]byte, 1500)
 			n, _, _ := c.conn.ReadFromUDP(ack)
 			ack = ack[0:n]
+			fmt.Printf("[lsp] Receive Message(%d):%s\n",len(ack),ack)
+			if len(ack)==0 {
+				continue
+			}
 			c.readMessageChanel.chanel <- ack
 		}
 	}
@@ -436,6 +446,7 @@ func (c *client) Write(payload []byte) error {
  * Close(): Close all routines after all data has been received and sent
  */
 func (c *client) Close() error {
+	fmt.Printf("[lsp] Close Connection\n")
 	c.clientClose <- 1
 	<-c.closeFinished
 	return nil
