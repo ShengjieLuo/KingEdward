@@ -1,3 +1,17 @@
+/******************************************************************
+ **                    15-640 Project1 CheckPoint3               **
+ **                     Distributed Bitcoin Miner                **
+ ******************************************************************
+ **Intorduction:                                                 **
+ **1. Build upon the LSP protocol( client end).                  **
+ **2. Implementation the client which send jobs to server and    **
+ **   output result. 										     ** 
+ ******************************************************************
+ **Author:                                                       **
+ ** Shengjie Luo shengjil@andrew.cmu.edu                         **
+ ** Ke Chang     kec1@andrew.cmu.edu                             **
+ ******************************************************************
+ */
 package main
 
 import (
@@ -7,32 +21,9 @@ import (
 	"strconv"
 	"github.com/cmu440/bitcoin"
 	"github.com/cmu440/lsp"
-	"log"
-	"time"
 )
 
-
-var LOGF *log.Logger
-
-func initLogger()(*log.Logger){
-        const (
-                flag = os.O_RDWR | os.O_CREATE
-                perm = os.FileMode(0666)
-        )
-	now  := time.Now()
-        name := "logClient_"+strconv.FormatInt(now.Unix(),10)+".txt"
-        file, err := os.OpenFile(name, flag, perm)
-        if err != nil {
-                return nil
-        }
-        defer file.Close()
-        return log.New(file, "", log.Lshortfile|log.Lmicroseconds)
-}
-
 func main() {
-	LOGF = initLogger()
-	LOGF.Printf("[Client] Begin Execution\n")
-	//fmt.Printf("[Client] Begin Execution\n")
 	const numArgs = 4
 	if len(os.Args) != numArgs {
 		fmt.Printf("Usage: ./%s <hostport> <message> <maxNonce>", os.Args[0])
@@ -41,7 +32,7 @@ func main() {
 	hostport := os.Args[1]
 	message := os.Args[2]
 	maxNonce, err := strconv.ParseUint(os.Args[3], 10, 64)
-        fmt.Printf("[Client] Message:%s Nonce:%d \n",message,maxNonce)
+	//fmt.Printf("[Client] Message:%s Nonce:%d \n",message,maxNonce)
 	if err != nil {
 		fmt.Printf("%s is not a number.\n", os.Args[3])
 		return
@@ -53,20 +44,24 @@ func main() {
 		return
 	}
 
-
+	// New request message
 	requestMessge := bitcoin.NewRequest(message, 0, maxNonce)
-	byteRequest, _ := json.Marshal(requestMessge)
-	client.Write(byteRequest)
+	byteRequest, _ := json.Marshal(requestMessge) // Marshal msg
+	client.Write(byteRequest) // Send msg
 	//fmt.Printf("[Client] Wait for Result...\n")
-	byteResult, err := client.Read()
+	byteResult, err := client.Read() // Wait for response
+	// Server closed
 	if err != nil{
 		//fmt.Printf("[Read] Logf Read Error and Exit now!\n")
 		printDisconnected()
 	} else {
+		// Unmarshal result
 		var result = new(bitcoin.Message)
 		//fmt.Printf("[Result] "+ result.String()+"\n")
 		json.Unmarshal(byteResult, result)
+		// Output
 		printResult(result.Hash, result.Nonce)
+		// CLose client
 		client.Close()
 	}
 	return
