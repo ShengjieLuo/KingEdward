@@ -98,6 +98,7 @@ type client struct {
 	beClosed      int
 	lastMsgEpoch  int
 	currentEpoch  int
+	receivedLastEpoch int
 	epochFirer    *time.Ticker
 
 	writeDataChanel  dataChanel
@@ -122,7 +123,7 @@ func NewClient(hostport string, params *Params) (*client, error) {
 		&lspnet.UDPConn{}, &lspnet.UDPAddr{}, -1,
 		make(chan int), make(chan int), make(chan int),
 		make(chan int), make(chan int),
-		0, 0, 0,
+		0, 0, 0, 0
 		time.NewTicker(time.Duration(params.EpochMillis) * time.Millisecond),
 		dataChanel{make(chan []byte, maxDataChanel)},
 		dataSendBuffer{make([]([]byte), 0, maxPendingData)},
@@ -256,9 +257,10 @@ func (c *client) mainRoutine() {
 					return
 				}
 				// No data from server ever, send ACK(0)
-				if c.readSeqNum == -1 {
+				if c.readSeqNum == -1 || c.receivedLastEpoch == 0{
 					c.sendMsg(MsgAck, 0, nil)
 				}
+				c.receivedLastEpoch = 0 
 				// Check each on fly message and re-send if needed
 				for seqNum, epInfo := range c.writeOnFly {
 					// Reach limit, resend
@@ -305,6 +307,7 @@ func (c *client) mainRoutine() {
 				} else if response.Size > len(response.Payload) {
 					continue
 				}
+				c.receivedLastEpoch = 1
 				// Send ACK
 				c.sendMsg(MsgAck, response.SeqNum, nil)
 				// If it's first message from server
