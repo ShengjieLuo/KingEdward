@@ -62,10 +62,10 @@ func mainRoutine(ls *libstore) {
 	queryList  := make([][]string,storagerpc.QueryCacheSeconds)
 	expireMap  := make(map[string]int)
 	timeTicker := 0
-	queryUnit  := make([]string)
+	queryUnit  := make([]string,0)
 	for {
 		select{
-			case timeTicker:<-ls.Ticker:
+			case timeTicker = <-ls.Ticker:
 				//0. Remove outdate queryunit
 				queryList = append(queryList[:0], queryList[1:]...)
 				//1. Add new queryunit
@@ -84,17 +84,17 @@ func mainRoutine(ls *libstore) {
 						}
 					}
 				}
-			case req:<-ls.QueryReqs:
+			case req:=<-ls.QueryReqs:
 				//0. Find the key in CacheA
-				value,ok := ls.CacheA[req]
+				valueA,ok := ls.CacheA[req]
 				if ok{
-					ls.QueryReps <- cacheReply{Status:3,ValueA:value,ValueB:nil}
+					ls.QueryReps <- cacheReply{Status:3,ValueA:valueA,ValueB:nil}
 					continue
 				}
 				//1. Find the key in CacheB
-				value,ok := ls.CacheB[req]
+				valueB,ok := ls.CacheB[req]
 				if ok{
-					ls.QueryReps <- cacheReply{Status:4,ValueA:nil,ValueB:value}
+					ls.QueryReps <- cacheReply{Status:4,ValueA:"",ValueB:valueB}
 					continue
 				}
 				//2. Find the key required lease
@@ -103,42 +103,46 @@ func mainRoutine(ls *libstore) {
 					for _,query := range(queryUnit) {
 						if query==req {
 							count += 1
-							if count>=storage {
+							if count>=storagerpc.QueryCacheThresh {
 								break;
 							}
 						}
 					}
 				}
 				queryUnit = append(queryUnit,req)
-				if count>=storage {
-					ls.QueryReps <- cacheReply{Status:1,ValueA:nil,ValueB:nil}
+				if count>=storagerpc.QueryCacheThresh {
+					ls.QueryReps <- cacheReply{Status:1,ValueA:"",ValueB:nil}
 				} else {
-					ls.QueryReps <- cacheReply{Status:2,ValueA:nil,ValueB:nil}
+					ls.QueryReps <- cacheReply{Status:2,ValueA:"",ValueB:nil}
 				}
-			case arg:<-ls.Insert:
+			case arg:=<-ls.Insert:
 				//0. Insert into cache
 				if arg.Status==0{
-					ls.CacheA[arg.Key] = arg.ValueA
+					ls.CacheA[arg.Key] = arg.ReplyA.Value
 				} else if arg.Status==1 {
-					ls.CacheB[arg.Key] = arg.ValueB
+					ls.CacheB[arg.Key] = arg.ReplyB.Value
 				}
 				//1. Update ExpireMap
-				expireMap[arg.Key] = timeTicker + arg.Lease.LeaseSeconds + arg.Lease.LeaseGuardSeconds
-			case rem:<-ls.RemoveReqs:
+				if arg.Status==0{
+					expireMap[arg.Key] = timeTicker + arg.ReplyA.Lease.ValidSeconds + storagerpc.LeaseGuardSeconds
+				} else if arg.Status==1 {
+					expireMap[arg.Key] = timeTicker + arg.ReplyB.Lease.ValidSeconds + storagerpc.LeaseGuardSeconds
+				}
+			case rem:=<-ls.RemoveReqs:
 				//0. Remove from Cache
-				_,ok1 := ls.CacheA[rem];
-				_,ok2 := ls.CacheB[rem];
+				_,ok1 := ls.CacheA[rem]
+				_,ok2 := ls.CacheB[rem]
 				if ok1 {
-					delete(ls.CacheA,rem);
+					delete(ls.CacheA,rem)
 					ls.RemoveReps<-storagerpc.OK
 				} else if ok2 {
-					delete(ls.CacheB,rem);
+					delete(ls.CacheB,rem)
 					ls.RemoveReps<-storagerpc.OK
 				} else {
 					ls.RemoveReps<-storagerpc.KeyNotFound
 				}
 				//1. Update Expiremap
-				delete(expireMap,arg.Key)
+				delete(expireMap,rem)
 		}
 	}
 }
@@ -152,12 +156,12 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 	cacheB    := make(map[string][]string)
 	queryReqs := make(chan string)
 	queryReps := make(chan cacheReply)
-	insert    := make(chan cahceArgs)
+	insert    := make(chan cacheArgs)
 	ticker    := make(chan int)
 	removeReqs:= make(chan string)
 	removeReps:= make(chan storagerpc.Status)
 	ls        := &libstore{client: cli, HostPort: myHostPort, Lease:mode, CacheA:cacheA, CacheB:cacheB,
-		      QueryReqs: queryReqs, QueryReps: queryReps, InsertA: insertA, InsertB: insertB,
+		      QueryReqs: queryReqs, QueryReps: queryReps, Insert: insert,
               RemoveReqs:removeReqs, RemoveReps:removeReps,Ticker:ticker}
 	go timeRoutine(ls)
 	go mainRoutine(ls)
@@ -170,11 +174,11 @@ func (ls *libstore) Get(key string) (string, error) {
     //Step0: Quer Cache
 	var leaseFlag bool
 	ls.QueryReqs <- key
-	rep :<-ls.QuerReps
+	rep :=<-ls.QueryReps
 	if (rep.Status==3){
 		return rep.ValueA,nil
 	} else if (rep.Status==4){
-		return nil,errors.New("Found incompatiable type in cache")
+		return "",errors.New("Found incompatiable type in cache")
 	} else if (rep.Status==1){
 		leaseFlag = true
 	} else {
@@ -199,7 +203,8 @@ func (ls *libstore) Get(key string) (string, error) {
 
 	//Step3:Fetch reply
 	if leaseFlag && reply.Lease.Granted {
-		insert <-cacheArgs{Status:0,Key:key,ReplyA:reply,ReplyB:nil}
+		emptyReplyB:= storagerpc.GetListReply{Status:0,Value:nil,Lease:storagerpc.Lease{Granted:false,ValidSeconds:0}}
+		ls.Insert <-cacheArgs{Status:0,Key:key,ReplyA:reply,ReplyB:emptyReplyB}
 	}
 	if reply.Status == storagerpc.OK {
 		return reply.Value, nil
@@ -244,9 +249,8 @@ func (ls *libstore) GetList(key string) ([]string, error) {
 	fmt.Printf("[libstore] GetList(%s)\n",key)
 	//Step0: Quer Cache
 	var leaseFlag bool
-	var rep cacheReply
 	ls.QueryReqs <- key
-	rep <-ls.QuerReps
+	rep := <-ls.QueryReps
 	if (rep.Status==4){
 		return rep.ValueB,nil
 	} else if (rep.Status==3){
@@ -274,7 +278,8 @@ func (ls *libstore) GetList(key string) ([]string, error) {
 	}
 	//Step2:Fetch reply
 	if leaseFlag && reply.Lease.Granted {
-		insert <-cacheArgs{Status:1,Key:key,ReplyA:nil,ReplyB:reply}
+		emptyReplyA:= storagerpc.GetReply{Status:0,Value:"",Lease:storagerpc.Lease{Granted:false,ValidSeconds:0}}
+		ls.Insert <-cacheArgs{Status:1,Key:key,ReplyA:emptyReplyA,ReplyB:reply}
 	}
 	if reply.Status == storagerpc.OK {
 		return reply.Value, nil
@@ -317,6 +322,6 @@ func (ls *libstore) AppendToList(key, newItem string) error {
 
 func (ls *libstore) RevokeLease(args *storagerpc.RevokeLeaseArgs, reply *storagerpc.RevokeLeaseReply) error {
 	ls.RemoveReqs <- args.Key
-	reply.Status  <- ls.RemoveReps
+	reply.Status  = <-ls.RemoveReps
 	return nil
 }
