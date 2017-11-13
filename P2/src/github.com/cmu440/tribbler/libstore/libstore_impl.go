@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/cmu440/tribbler/rpc/storagerpc"
-	//"github.com/cmu440/tribbler/rpc/librpc"
+	"github.com/cmu440/tribbler/rpc/librpc"
 	//"github.com/cmu440/tribbler/storageserver"
 )
 
@@ -34,6 +34,7 @@ type cacheReply struct {
 
 
 type libstore struct {
+	Clock	   int
 	HostPort   string
 	client     *rpc.Client
 	Lease      LeaseMode
@@ -44,36 +45,47 @@ type libstore struct {
 	QueryReps  chan cacheReply
 	//Get() insert items into CacheA, GetList() insert items into CacheB
 	Insert     chan cacheArgs
+	InsertReps chan storagerpc.Status
 	RemoveReqs chan string
 	RemoveReps chan storagerpc.Status
 	Ticker     chan int
 }
 
 func timeRoutine(ls *libstore) {
-    i := 1
     ticker := time.NewTicker(time.Second)
     for _ = range ticker.C {
-		ls.Ticker <- i
-		i += 1
+		ls.Ticker <- 1
     }
 }
 
 func mainRoutine(ls *libstore) {
 	queryList  := make([][]string,storagerpc.QueryCacheSeconds)
 	expireMap  := make(map[string]int)
-	timeTicker := 0
+	//timeTicker := 0
 	queryUnit  := make([]string,0)
 	for {
+		//fmt.Printf("***Time Ticker:%d\n",timeTicker)
 		select{
-			case timeTicker = <-ls.Ticker:
+			case <-ls.Ticker:
+				ls.Clock = ls.Clock + 1
+				fmt.Printf("==========[%s]Time Ticker:%d=========\n",ls.HostPort,ls.Clock)
+				fmt.Println(queryList)
+				fmt.Println(queryUnit)
+				fmt.Printf("---------------------------------------\n")
 				//0. Remove outdate queryunit
-				queryList = append(queryList[:0], queryList[1:]...)
+				//queryList = append(queryList[:0], queryList[1:]...)
+				queryList = queryList[1:]
 				//1. Add new queryunit
 				queryList = append(queryList,queryUnit)
-				queryUnit = queryUnit[:0]
+				//queryUnit = queryUnit[:0]
+				queryUnit = nil
+				fmt.Println(queryList)
+				fmt.Println(queryUnit)
+				fmt.Printf("=======================================\n")
 				//2. Expire Items
 				for key,value := range expireMap {
-					if value==timeTicker {
+					if value==ls.Clock {
+						fmt.Printf("[%s] Lease Timeout in %d(%s)\n",ls.HostPort,ls.Clock,key)
 						delete(expireMap,key)
 						_,ok1 := ls.CacheA[key];
 						_,ok2 := ls.CacheB[key];
@@ -84,7 +96,11 @@ func mainRoutine(ls *libstore) {
 						}
 					}
 				}
+			//default:
+		//}
+		//select{
 			case req:=<-ls.QueryReqs:
+				fmt.Printf("***Query Request:%s\n",req)
 				//0. Find the key in CacheA
 				valueA,ok := ls.CacheA[req]
 				if ok{
@@ -99,8 +115,8 @@ func mainRoutine(ls *libstore) {
 				}
 				//2. Find the key required lease
 				count := 0
-				for _,queryUnit := range(queryList){
-					for _,query := range(queryUnit) {
+				for _,queryu := range(queryList){
+					for _,query := range(queryu) {
 						if query==req {
 							count += 1
 							if count>=storagerpc.QueryCacheThresh {
@@ -109,13 +125,23 @@ func mainRoutine(ls *libstore) {
 						}
 					}
 				}
+				for _,query := range(queryUnit){
+					if query==req {
+						count += 1
+						if count>=storagerpc.QueryCacheThresh {
+							break;
+						}
+					}
+				}
 				queryUnit = append(queryUnit,req)
+				fmt.Printf("[%s] Count Previous Query Number :%d(%s)\n",ls.HostPort,count,req)
 				if count>=storagerpc.QueryCacheThresh {
 					ls.QueryReps <- cacheReply{Status:1,ValueA:"",ValueB:nil}
 				} else {
 					ls.QueryReps <- cacheReply{Status:2,ValueA:"",ValueB:nil}
 				}
 			case arg:=<-ls.Insert:
+				//fmt.Printf("***Insert Request\n")
 				//0. Insert into cache
 				if arg.Status==0{
 					ls.CacheA[arg.Key] = arg.ReplyA.Value
@@ -124,11 +150,14 @@ func mainRoutine(ls *libstore) {
 				}
 				//1. Update ExpireMap
 				if arg.Status==0{
-					expireMap[arg.Key] = timeTicker + arg.ReplyA.Lease.ValidSeconds + storagerpc.LeaseGuardSeconds
+					expireMap[arg.Key] = ls.Clock + arg.ReplyA.Lease.ValidSeconds + storagerpc.LeaseGuardSeconds-1
 				} else if arg.Status==1 {
-					expireMap[arg.Key] = timeTicker + arg.ReplyB.Lease.ValidSeconds + storagerpc.LeaseGuardSeconds
+					expireMap[arg.Key] = ls.Clock + arg.ReplyB.Lease.ValidSeconds + storagerpc.LeaseGuardSeconds-1
 				}
+				fmt.Printf("[%s] Lease Expiration Expectation in %d(%s)\n",ls.HostPort,expireMap[arg.Key],arg.Key)
+				ls.InsertReps <- storagerpc.OK
 			case rem:=<-ls.RemoveReqs:
+				//fmt.Printf("***Remove Request\n")
 				//0. Remove from Cache
 				_,ok1 := ls.CacheA[rem]
 				_,ok2 := ls.CacheB[rem]
@@ -143,26 +172,55 @@ func mainRoutine(ls *libstore) {
 				}
 				//1. Update Expiremap
 				delete(expireMap,rem)
+			//default:
+				//continue
 		}
 	}
 }
 
 func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libstore, error) {
+    //fmt.Printf("[libstore] Create new libstore\n")
 	cli, err := rpc.DialHTTP("tcp", masterServerHostPort)
 	if err != nil {
 		return nil, err
 	}
-	cacheA    := make(map[string]string)
+	var node storagerpc.Node
+    //Get Routing Servers
+	for {
+		args := &storagerpc.GetArgs{}
+		var reply storagerpc.GetServersReply
+		errGetServer := cli.Call("StorageServer.GetServers", args, &reply)
+		if errGetServer!=nil {
+			return nil,errGetServer
+		}
+		if reply.Status!=storagerpc.OK {
+			continue
+		}
+		node = reply.Servers[0]
+		break
+	}
+	client,errWorkServer := rpc.DialHTTP("tcp",node.HostPort)
+	if errWorkServer!=nil {
+		return nil,errWorkServer
+	}
+
+    cacheA    := make(map[string]string)
 	cacheB    := make(map[string][]string)
 	queryReqs := make(chan string)
 	queryReps := make(chan cacheReply)
 	insert    := make(chan cacheArgs)
+	insertReps:= make(chan storagerpc.Status)
 	ticker    := make(chan int)
 	removeReqs:= make(chan string)
 	removeReps:= make(chan storagerpc.Status)
-	ls        := &libstore{client: cli, HostPort: myHostPort, Lease:mode, CacheA:cacheA, CacheB:cacheB,
-		      QueryReqs: queryReqs, QueryReps: queryReps, Insert: insert,
-              RemoveReqs:removeReqs, RemoveReps:removeReps,Ticker:ticker}
+	libstore  := libstore{client: client, HostPort: myHostPort, Lease:mode, CacheA:cacheA, CacheB:cacheB,
+		      QueryReqs: queryReqs, QueryReps: queryReps, Insert: insert, InsertReps:insertReps,
+              RemoveReqs:removeReqs, RemoveReps:removeReps,Ticker:ticker,Clock:0}
+	ls        := &libstore
+	err =  rpc.RegisterName("LeaseCallbacks",librpc.Wrap(ls))
+	if err != nil {
+		return nil, err
+	}
 	go timeRoutine(ls)
 	go mainRoutine(ls)
 	return ls,nil
@@ -205,6 +263,7 @@ func (ls *libstore) Get(key string) (string, error) {
 	if leaseFlag && reply.Lease.Granted {
 		emptyReplyB:= storagerpc.GetListReply{Status:0,Value:nil,Lease:storagerpc.Lease{Granted:false,ValidSeconds:0}}
 		ls.Insert <-cacheArgs{Status:0,Key:key,ReplyA:reply,ReplyB:emptyReplyB}
+		<-ls.InsertReps
 	}
 	if reply.Status == storagerpc.OK {
 		return reply.Value, nil
@@ -214,7 +273,11 @@ func (ls *libstore) Get(key string) (string, error) {
 }
 
 func (ls *libstore) Put(key, value string) error {
-	fmt.Printf("[libstore] Put(%s->%s)\n",key,value)
+	if len(value)<30 {
+		//fmt.Printf("[libstore] Put(%s->%s)\n",key,value)
+	} else {
+		//fmt.Printf("[libstore] Put(%s)\n",key)
+	}
 	args := &storagerpc.PutArgs{key, value}
 	var reply storagerpc.PutReply
 	err := ls.client.Call("StorageServer.Put", args, &reply)
@@ -246,7 +309,7 @@ func (ls *libstore) Delete(key string) error {
 }
 
 func (ls *libstore) GetList(key string) ([]string, error) {
-	fmt.Printf("[libstore] GetList(%s)\n",key)
+	//fmt.Printf("[libstore] GetList(%s)\n",key)
 	//Step0: Quer Cache
 	var leaseFlag bool
 	ls.QueryReqs <- key
@@ -280,6 +343,7 @@ func (ls *libstore) GetList(key string) ([]string, error) {
 	if leaseFlag && reply.Lease.Granted {
 		emptyReplyA:= storagerpc.GetReply{Status:0,Value:"",Lease:storagerpc.Lease{Granted:false,ValidSeconds:0}}
 		ls.Insert <-cacheArgs{Status:1,Key:key,ReplyA:emptyReplyA,ReplyB:reply}
+		<-ls.InsertReps
 	}
 	if reply.Status == storagerpc.OK {
 		return reply.Value, nil
@@ -289,7 +353,9 @@ func (ls *libstore) GetList(key string) ([]string, error) {
 }
 
 func (ls *libstore) RemoveFromList(key, removeItem string) error {
-	//fmt.Printf("[libstore] RemoveFromList(%s->%s)\n",key,removeItem)
+	if len(removeItem)<30 {
+		//fmt.Printf("[libstore] RemoveFromList(%s->%s)\n",key,removeItem)
+	}
 	args := &storagerpc.PutArgs{key, removeItem}
 	var reply storagerpc.PutReply
 	err := ls.client.Call("StorageServer.RemoveFromList", args, &reply)
@@ -305,7 +371,9 @@ func (ls *libstore) RemoveFromList(key, removeItem string) error {
 }
 
 func (ls *libstore) AppendToList(key, newItem string) error {
-	//fmt.Printf("[libstore] AppendToList(%s->%s)\n",key,newItem)
+	if len(newItem)<30{
+		//fmt.Printf("[libstore] AppendToList(%s->%s)\n",key,newItem)
+	}
 	args := &storagerpc.PutArgs{key, newItem}
 	var reply storagerpc.PutReply
 	err := ls.client.Call("StorageServer.AppendToList", args, &reply)
@@ -321,6 +389,7 @@ func (ls *libstore) AppendToList(key, newItem string) error {
 }
 
 func (ls *libstore) RevokeLease(args *storagerpc.RevokeLeaseArgs, reply *storagerpc.RevokeLeaseReply) error {
+	//fmt.Printf("[libstore] RevokeLease(%s)\n",args.Key)
 	ls.RemoveReqs <- args.Key
 	reply.Status  = <-ls.RemoveReps
 	return nil
