@@ -32,11 +32,15 @@ type cacheReply struct {
 	ValueB	[]string
 }
 
+type hashClient struct {
+	client     *rpc.Client
+	hash       uint32
+}
 
 type libstore struct {
 	Clock	   int
 	HostPort   string
-	client     *rpc.Client
+	Clients    []hashClient
 	Lease      LeaseMode
 	CacheA     map[string]string
 	CacheB     map[string][]string
@@ -56,6 +60,19 @@ func timeRoutine(ls *libstore) {
     for _ = range ticker.C {
 		ls.Ticker <- 1
     }
+}
+
+func getClient(ls *libstore, key string) *rpc.Client{
+	value := StoreHash(key)
+	if value<ls.Clients[0].hash||value>ls.Clients[len(ls.Clients)-1].hash {
+		return ls.Clients[0].client
+	}
+	for _,cli := range(ls.Clients){
+		if (cli.hash>=value){
+			return cli.client
+		}
+	}
+	return nil
 }
 
 func mainRoutine(ls *libstore) {
@@ -184,8 +201,8 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 	if err != nil {
 		return nil, err
 	}
-	var node storagerpc.Node
-    //Get Routing Servers
+    //Get Routing Servers List
+	clients := make([]hashClient,0)
 	for {
 		args := &storagerpc.GetArgs{}
 		var reply storagerpc.GetServersReply
@@ -196,12 +213,16 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 		if reply.Status!=storagerpc.OK {
 			continue
 		}
-		node = reply.Servers[0]
+		for _,node :=range(reply.Servers){
+			client,errWorkServer := rpc.DialHTTP("tcp",node.HostPort)
+			if errWorkServer!=nil {
+				return nil,errors.New("[fatal] Cannot make conection with work server!\n")
+			}
+			hashclient := hashClient{client,node.NodeID}
+			clients = append(clients,hashclient)
+		}
+		fmt.Println(clients)
 		break
-	}
-	client,errWorkServer := rpc.DialHTTP("tcp",node.HostPort)
-	if errWorkServer!=nil {
-		return nil,errWorkServer
 	}
 
     cacheA    := make(map[string]string)
@@ -213,7 +234,7 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 	ticker    := make(chan int)
 	removeReqs:= make(chan string)
 	removeReps:= make(chan storagerpc.Status)
-	libstore  := libstore{client: client, HostPort: myHostPort, Lease:mode, CacheA:cacheA, CacheB:cacheB,
+	libstore  := libstore{Clients: clients, HostPort: myHostPort, Lease:mode, CacheA:cacheA, CacheB:cacheB,
 		      QueryReqs: queryReqs, QueryReps: queryReps, Insert: insert, InsertReps:insertReps,
               RemoveReqs:removeReqs, RemoveReps:removeReps,Ticker:ticker,Clock:0}
 	ls        := &libstore
@@ -229,7 +250,7 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 func (ls *libstore) Get(key string) (string, error) {
 	fmt.Printf("[libstore] Get(%s)\n",key)
 
-    //Step0: Quer Cache
+    //Step0: Query Cache
 	var leaseFlag bool
 	ls.QueryReqs <- key
 	rep :=<-ls.QueryReps
@@ -252,8 +273,9 @@ func (ls *libstore) Get(key string) (string, error) {
 	args := &storagerpc.GetArgs{key, leaseFlag, ls.HostPort}
 
 	//Step2: Send RPC request
+	client := getClient(ls,key)
 	var reply storagerpc.GetReply
-	err := ls.client.Call("StorageServer.Get", args, &reply)
+	err := client.Call("StorageServer.Get", args, &reply)
 	if err != nil {
 		fmt.Println(err)
 		return "", err
@@ -273,21 +295,25 @@ func (ls *libstore) Get(key string) (string, error) {
 }
 
 func (ls *libstore) Put(key, value string) error {
+	fmt.Printf("[libstore] Hash Key Value:%d\n",StoreHash(key))
 	if len(value)<30 {
-		//fmt.Printf("[libstore] Put(%s->%s)\n",key,value)
+		fmt.Printf("[libstore] Put(%s->%s)\n",key,value)
 	} else {
 		//fmt.Printf("[libstore] Put(%s)\n",key)
 	}
 	args := &storagerpc.PutArgs{key, value}
 	var reply storagerpc.PutReply
-	err := ls.client.Call("StorageServer.Put", args, &reply)
+	client := getClient(ls,key)
+	err := client.Call("StorageServer.Put", args, &reply)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Printf("[Fatal] Put key-value crash!")
 		return err
 	}
 	if reply.Status == storagerpc.OK {
+		fmt.Printf("[libstore] Put ok\n")
 		return nil
 	} else {
+		fmt.Printf("[Fatal] Put key-value reply error status %d!\n",reply.Status)
 		return errors.New(string(reply.Status))
 	}
 }
@@ -296,7 +322,8 @@ func (ls *libstore) Delete(key string) error {
 	//fmt.Printf("[libstore] Delete(%s)\n",key)
 	args := &storagerpc.DeleteArgs{key}
 	var reply storagerpc.DeleteReply
-	err := ls.client.Call("StorageServer.Delete", args, &reply)
+	client := getClient(ls,key)
+	err := client.Call("StorageServer.Delete", args, &reply)
 	if err != nil {
 		fmt.Println(err)
 		return err
@@ -333,8 +360,9 @@ func (ls *libstore) GetList(key string) ([]string, error) {
 	args := &storagerpc.GetArgs{key, leaseFlag, ls.HostPort}
 
 	//Step2:Send rpc request
+	client := getClient(ls,key)
 	var reply storagerpc.GetListReply
-	err := ls.client.Call("StorageServer.GetList", args, &reply)
+	err := client.Call("StorageServer.GetList", args, &reply)
 	if err != nil {
 		fmt.Println(err)
 		return nil, err
@@ -358,7 +386,8 @@ func (ls *libstore) RemoveFromList(key, removeItem string) error {
 	}
 	args := &storagerpc.PutArgs{key, removeItem}
 	var reply storagerpc.PutReply
-	err := ls.client.Call("StorageServer.RemoveFromList", args, &reply)
+	client := getClient(ls,key)
+	err := client.Call("StorageServer.RemoveFromList", args, &reply)
 	if err != nil {
 		fmt.Println(err)
 		return err
@@ -375,8 +404,9 @@ func (ls *libstore) AppendToList(key, newItem string) error {
 		//fmt.Printf("[libstore] AppendToList(%s->%s)\n",key,newItem)
 	}
 	args := &storagerpc.PutArgs{key, newItem}
+	client := getClient(ls,key)
 	var reply storagerpc.PutReply
-	err := ls.client.Call("StorageServer.AppendToList", args, &reply)
+	err := client.Call("StorageServer.AppendToList", args, &reply)
 	if err != nil {
 		fmt.Println(err)
 		return err
