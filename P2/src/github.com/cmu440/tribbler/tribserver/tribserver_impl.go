@@ -46,10 +46,10 @@ func NewTribServer(masterServerHostPort, myHostPort string) (TribServer, error) 
 	if err != nil {
 		return nil, err
 	}
-	err =  rpc.RegisterName("LeaseCallbacks",librpc.Wrap(libstore))
+	/*err =  rpc.RegisterName("LeaseCallbacks",librpc.Wrap(lib))
 	if err != nil {
 		return nil, err
-	}
+	}*/
 
 	rpc.HandleHTTP()
 	go http.Serve(listener, nil)
