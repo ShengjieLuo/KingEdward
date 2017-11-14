@@ -41,7 +41,7 @@ TRIB_SERVER=$GOPATH/bin/trunner
 function startStorageServers {
     N=${#STORAGE_ID[@]}
     # Start master storage server.
-    ${STORAGE_SERVER} -N=${N} -id=${STORAGE_ID[0]} -port=${STORAGE_PORT} &> /dev/null &
+    ${STORAGE_SERVER} -N=${N} -id=${STORAGE_ID[0]} -port=${STORAGE_PORT} &
     STORAGE_SERVER_PID[0]=$!
     # Start slave storage servers.
     if [ "$N" -gt 1 ]
@@ -70,7 +70,7 @@ function startTribServers {
     do
         # Pick random port between [10000, 20000).
         TRIB_PORT[$i]=$(((RANDOM % 10000) + 10000))
-        ${TRIB_SERVER} -port=${TRIB_PORT[$i]} "localhost:${STORAGE_PORT}" &> /dev/null &
+        ${TRIB_SERVER} -port=${TRIB_PORT[$i]} "localhost:${STORAGE_PORT}" &
         TRIB_SERVER_PID[$i]=$!
     done
     sleep 5

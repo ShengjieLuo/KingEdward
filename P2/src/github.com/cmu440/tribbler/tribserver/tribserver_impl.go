@@ -27,35 +27,38 @@ type tribServer struct {
 //
 // For hints on how to properly setup RPC, see the rpc/tribrpc package.
 func NewTribServer(masterServerHostPort, myHostPort string) (TribServer, error) {
-	tribServer := new(tribServer)
 
 	//Step1:Initialize libstore
+	fmt.Printf("[tribServer] Begin to Initialize server\n")
 	lib, errlib := libstore.NewLibstore(masterServerHostPort, myHostPort, libstore.Never)
 	if errlib != nil {
 		//fmt.Println(errlib)
 		return nil, errlib
 	}
-	tribServer.lib = lib
 
 	//Step2: Establish the http listener to listen tribclient
+	fmt.Printf("[tribServer] 1\n")
+	tribServer := new(tribServer)
+	err := rpc.RegisterName("TribServer", tribrpc.Wrap(tribServer))
+	fmt.Printf("[tribServer] 2\n")
+	if err != nil {
+		return nil, err
+	}
+	fmt.Printf("[tribServer] 3\n")
+	rpc.HandleHTTP()
+	fmt.Printf("[tribServer] 4\n")
 	listener, err2 := net.Listen("tcp", myHostPort)
+	fmt.Printf("[tribServer] 5\n")
 	if err2 != nil {
 		return nil, err2
 	}
-	err := rpc.RegisterName("TribServer", tribrpc.Wrap(tribServer))
-	if err != nil {
-		return nil, err
-	}
-	/*err =  rpc.RegisterName("LeaseCallbacks",librpc.Wrap(lib))
-	if err != nil {
-		return nil, err
-	}*/
-
-	rpc.HandleHTTP()
 	go http.Serve(listener, nil)
+	fmt.Printf("[tribServer] 6\n")
 
 	//Step3: Initalize the key-value store
+	tribServer.lib = lib
 	tribServer.lib.Put("PC", "0")
+	fmt.Printf("[tribServer] Server Initialization Complete\n")
 	return tribServer, nil
 }
 

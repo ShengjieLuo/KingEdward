@@ -22,21 +22,25 @@ type tribClient struct {
 }
 
 func NewTribClient(serverHost string, serverPort int) (TribClient, error) {
-	var count int
-	var cli   *rpc.Client
-	var err   error
+	var cli *rpc.Client
+	var err error
 	for {
 		cli, err = rpc.DialHTTP("tcp", net.JoinHostPort(serverHost, strconv.Itoa(serverPort)))
-		if err != nil && count<=100 {
-			count++
+		if err != nil {
 			time.Sleep(100 * time.Millisecond)
 			continue
-		} else if err!=nil && count>100{
-			return nil,err
 		} else {
 			break
 		}
 	}
+	/*cli, err = rpc.DialHTTP("tcp", net.JoinHostPort(serverHost, strconv.Itoa(serverPort)))
+	if err != nil {
+		time.Sleep(1000 * time.Millisecond)
+		cli, err = rpc.DialHTTP("tcp", net.JoinHostPort(serverHost, strconv.Itoa(serverPort)))
+		if err != nil {
+			return nil, err
+		}
+	}*/
 	return &tribClient{client: cli}, nil
 }
 
