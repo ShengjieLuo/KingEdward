@@ -74,32 +74,33 @@ type epochInfo struct {
    9. beclose: indicate client has been closed and its type
    10. lastMsgEpoch: last epoch# with data arrived
    11. currentEpoch: current epoch #
-   12. epochFire: timer
-   13. writeDataChanel: data chanel from Write() to main routine
-   14. writeDataBuffer: pending data sent by Write()
-   15. writeSeqNum: start from 1
-   16. writeWindowBase: sliding window base, start from 1
-   17. writeACKReceived: received ACK
-   18. readSeqNum: received data sequence
-   19. readMessageChanel: new incoming message chanel
-   20. readDataChanel: chanel from main routine to Read()
-   21. readDataReceived: received out of order server data
+   12. receivedLastEpoch: indicate received msg last epoch
+   13. epochFire: timer
+   14. writeDataChanel: data chanel from Write() to main routine
+   15. writeDataBuffer: pending data sent by Write()
+   16. writeSeqNum: start from 1
+   17. writeWindowBase: sliding window base, start from 1
+   18. writeACKReceived: received ACK
+   19. readSeqNum: received data sequence
+   20. readMessageChanel: new incoming message chanel
+   21. readDataChanel: chanel from main routine to Read()
+   22. readDataReceived: received out of order server data
 */
 type client struct {
-	params            *Params
-	conn              *lspnet.UDPConn
-	addr              *lspnet.UDPAddr
-	connID            int
-	connResult        chan int
-	clientClose       chan int
-	closeEachComp     chan int
-	closeFinished     chan int
-	closeRead         chan int
-	beClosed          int
-	lastMsgEpoch      int
-	currentEpoch      int
-	receivedLastEpoch int
-	epochFirer        *time.Ticker
+	params        *Params
+	conn          *lspnet.UDPConn
+	addr          *lspnet.UDPAddr
+	connID        int
+	connResult    chan int
+	clientClose   chan int
+	closeEachComp chan int
+	closeFinished chan int
+	closeRead     chan int
+	beClosed      int
+	lastMsgEpoch  int
+	currentEpoch  int
+	receivedLastEpoch	int
+	epochFirer    *time.Ticker
 
 	writeDataChanel  dataChanel
 	writeDataBuffer  dataSendBuffer
@@ -170,7 +171,7 @@ func (c *client) sendMsg(tp MsgType, seqNum int, payload []byte) {
 	}
 	// Send generated message
 	msg, _ := json.Marshal(*data)
-	//fmt.Printf("[lsp] Send Message(%d):%s\n",len(msg),msg)
+        //fmt.Printf("[lsp] Send Message(%d):%s\n",len(msg),msg)
 	c.conn.Write(msg)
 }
 
@@ -262,7 +263,7 @@ func (c *client) mainRoutine() {
 				}
 				// No data from server ever, send ACK(0)
 				//fmt.Printf("[lsp] c.readSeqNum in current epoch:%d\n",c.readSeqNum)
-				if c.readSeqNum == -1 || c.receivedLastEpoch == 0 {
+				if c.readSeqNum == -1 || c.receivedLastEpoch == 0{
 					c.sendMsg(MsgAck, 0, nil)
 				}
 				c.receivedLastEpoch = 0
@@ -405,7 +406,7 @@ func (c *client) readRoutine() {
 			n, _, _ := c.conn.ReadFromUDP(ack)
 			ack = ack[0:n]
 			//fmt.Printf("[lsp] Receive Message(%d):%s\n",len(ack),ack)
-			if len(ack) == 0 {
+			if len(ack)==0 {
 				continue
 			}
 			c.readMessageChanel.chanel <- ack
