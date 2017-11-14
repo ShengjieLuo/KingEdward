@@ -148,6 +148,9 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 	selfNode := storagerpc.Node{fullAddress, nodeID}
 	if masterServerHostPort == "" {
 		s.serverList[0] = selfNode
+		if numNodes == 1{
+			s.initDone = true
+		}
 		for !s.initDone {
 			select {
 			//case <- s.initDoneRequest:
