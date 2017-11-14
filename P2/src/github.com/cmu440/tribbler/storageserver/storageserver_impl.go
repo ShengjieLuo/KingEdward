@@ -40,27 +40,33 @@ type storageServer struct {
 	listLock	*sync.Mutex
 }
 
-func rightServer(key string, ss *storageServer) (res bool){
+func (ss *storageServer)rightServer(key string) (res bool){
 	userInfo := strings.Split(key, ":")[0]
 	userHash := libstore.StoreHash(userInfo)
 	var curCandidate uint32 = math.MaxUint32
-	var lastCandidate uint32 = math.MaxUint32
-	for i := 0; i< ss.joinedNode; i++{
-		curServer := ss.serverList[i]
+	found := false
+	for _, curServer := range ss.serverList{
 		if curServer.NodeID < curCandidate && curServer.NodeID >= userHash{
 			curCandidate = curServer.NodeID
-		}else{
-			if curServer.NodeID < lastCandidate{
-				lastCandidate = curServer.NodeID
+			found = true
+		}
+	}
+	if found{
+		res = (curCandidate == ss.nodeID)
+	}else{
+		res = true
+		for _, curServer := range ss.serverList{
+			if curServer.NodeID < ss.nodeID{
+				res = false
+				break
 			}
 		}
 	}
-	res = (curCandidate == ss.nodeID) || (lastCandidate == ss.nodeID && curCandidate == math.MaxUint32)
 	return 
 }
 
 
-func grantLease(key, hostport string, ss *storageServer)(lease storagerpc.Lease){
+func (ss *storageServer)grantLease(key, hostport string)(lease storagerpc.Lease){
 	_, ok := ss.cachedConn[hostport]
 	if !ok{
 		newConn, _ := rpc.DialHTTP("tcp", hostport)
@@ -84,7 +90,7 @@ func grantLease(key, hostport string, ss *storageServer)(lease storagerpc.Lease)
 	return
 }
 
-func revokeLease(key string, ss *storageServer){
+func (ss *storageServer)revokeLease(key string){
 	ss.canLease[key] = false
 
 	owners, ok := ss.leaseOwner[key]
@@ -93,14 +99,14 @@ func revokeLease(key string, ss *storageServer){
 	}
 	for element := owners.Front(); element != nil; element = element.Next(){
 		eachOwner := element.Value.(*leaseTracker)
-		alreadyExpired := time.Since(eachOwner.grantedAt).Seconds() > leaseSeconds
-		if !alreadyExpired{
-			timeRemaining := leaseSeconds - time.Since(eachOwner.grantedAt).Seconds()
-			revokeArgs := &storagerpc.RevokeLeaseArgs{key}
-			revokeReply := &storagerpc.RevokeLeaseReply{}
-			resCall := ss.cachedConn[eachOwner.hostport].Go("LeaseCallbacks.RevokeLease", revokeArgs, revokeReply, nil)
+		timeRemaining := leaseSeconds - time.Since(eachOwner.grantedAt).Seconds()
+		if timeRemaining >= 0{
+			revokeArgs := storagerpc.RevokeLeaseArgs{key}
+			revokeReply := storagerpc.RevokeLeaseReply{}
+			curConn := ss.cachedConn[eachOwner.hostport]
+			callRes := curConn.Go("LeaseCallbacks.RevokeLease", &revokeArgs, &revokeReply, nil)
 			select{
-			case <-resCall.Done:
+			case <-callRes.Done:
 				break
 			case <-time.After(time.Duration(timeRemaining) * time.Second):	
 				break
@@ -124,8 +130,6 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 	
 	s := storageServer{numNodes, nodeID, 1, false,
 		make([]storagerpc.Node, numNodes),
-		//make(chan int),
-		//make(chan int),
 		make(chan storagerpc.Node),
 		make(chan storagerpc.RegisterReply),
 		make(map[string]string),
@@ -135,7 +139,6 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		make(map[string]*rpc.Client),
 		&sync.Mutex{},
 		&sync.Mutex{},
-		//&sync.Mutex{},
 	}
 	
 	fullAddress := fmt.Sprintf("localhost:%d",port)
@@ -221,7 +224,7 @@ func (ss *storageServer) GetServers(args *storagerpc.GetServersArgs, reply *stor
 }
 
 func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetReply) error {
-	if !rightServer(args.Key, ss){
+	if !ss.rightServer(args.Key){
 		reply.Status = storagerpc.WrongServer
 		return nil
 	}
@@ -231,7 +234,7 @@ func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetRepl
 		reply.Status = storagerpc.KeyNotFound
 	}else{
 		if args.WantLease{
-			reply.Lease = grantLease(args.Key, args.HostPort, ss)
+			reply.Lease = ss.grantLease(args.Key, args.HostPort)
 		}
 		reply.Status = storagerpc.OK
 		reply.Value = val
@@ -241,7 +244,7 @@ func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetRepl
 }
 
 func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.GetListReply) error {
-	if !rightServer(args.Key, ss){
+	if !ss.rightServer(args.Key){
 		reply.Status = storagerpc.WrongServer
 		return nil
 	}
@@ -253,7 +256,7 @@ func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.Get
 		reply.Status = storagerpc.OK
 		reply.Value = make([]string, val.Len())
 		if args.WantLease{
-			reply.Lease = grantLease(args.Key, args.HostPort, ss)
+			reply.Lease = ss.grantLease(args.Key, args.HostPort)
 		}
 
 		for idx, element := 0, val.Front(); element != nil; element, idx = element.Next(), idx+1{
@@ -266,11 +269,11 @@ func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.Get
 }
 
 func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
-	if !rightServer(args.Key, ss){
+	if !ss.rightServer(args.Key){
 		reply.Status = storagerpc.WrongServer
 		return nil
 	}
-	revokeLease(args.Key, ss)
+	ss.revokeLease(args.Key)
 
 	ss.postLock.Lock()
 	ss.postData[args.Key] = args.Value
@@ -281,11 +284,11 @@ func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutRepl
 }
 
 func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
-	if !rightServer(args.Key, ss){
+	if !ss.rightServer(args.Key){
 		reply.Status = storagerpc.WrongServer
 		return nil
 	}
-	revokeLease(args.Key, ss)
+	ss.revokeLease(args.Key)
 	ss.listLock.Lock()
 
 	_, ok := ss.listData[args.Key]
@@ -311,11 +314,11 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 }
 
 func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
-	if !rightServer(args.Key, ss){
+	if !ss.rightServer(args.Key){
 		reply.Status = storagerpc.WrongServer
 		return nil
 	}
-	revokeLease(args.Key, ss)
+	ss.revokeLease(args.Key)
 	
 	ss.listLock.Lock()
 
@@ -340,12 +343,12 @@ func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storage
 }
 
 func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.DeleteReply) error {
-	if !rightServer(args.Key, ss){
+	if !ss.rightServer(args.Key){
 		reply.Status = storagerpc.WrongServer
 		return nil
 	}
 
-	revokeLease(args.Key, ss)
+	ss.revokeLease(args.Key)
 
 	ss.postLock.Lock()
 	_, ok := ss.postData[args.Key] 
