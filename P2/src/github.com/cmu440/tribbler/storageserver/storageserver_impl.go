@@ -21,6 +21,22 @@ type leaseTracker struct {
 	grantedAt time.Time
 }
 
+/* Data Structure Definition: storageServer
+   1. numNodes: number of nodes
+   2. nodeID: node id number
+   3. joinedNode: current jointed node number
+   4. initDone: finished initialization or not
+   5. serverList: all server list
+   6. newNodesChanle: pass new node info
+   7. newNodesResult: new node result
+   8. postData: store each post
+   9. listData: store user list
+   10. canLease: whether a key can be leased
+   11. leaseOwner: info of owner of each lease
+   12. cachedConn: do rpc call
+   13. postLock: post data lock
+   14. listLock: list data lock
+*/
 type storageServer struct {
 	numNodes   int
 	nodeID     uint32
@@ -39,18 +55,24 @@ type storageServer struct {
 	postLock       *sync.Mutex
 	listLock       *sync.Mutex
 }
-
+/* 
+ *	Based on ring hash to determine if the key belongs to
+ *  current node
+ */
 func (ss *storageServer) rightServer(key string) (res bool) {
-	userInfo := strings.Split(key, ":")[0]
-	userHash := libstore.StoreHash(userInfo)
-	var curCandidate uint32 = math.MaxUint32
+	userInfo := strings.Split(key, ":")[0] // To be hashed
+	userHash := libstore.StoreHash(userInfo) // Key hash Value
+	var curCandidate uint32 = math.MaxUint32 // Candidate Node
+	// Search for candidate node
 	found := false
 	for _, curServer := range ss.serverList {
+		// Find one
 		if curServer.NodeID < curCandidate && curServer.NodeID >= userHash {
 			curCandidate = curServer.NodeID
 			found = true
 		}
 	}
+	// If there is no candidate, choose the smalles one
 	if found {
 		res = (curCandidate == ss.nodeID)
 	} else {
@@ -65,7 +87,12 @@ func (ss *storageServer) rightServer(key string) (res bool) {
 	return
 }
 
+
+/*
+ * Grant leases to certain node
+ */
 func (ss *storageServer) grantLease(key, hostport string) (lease storagerpc.Lease) {
+	// Check and establish the connection to do rcp call 
 	_, ok := ss.cachedConn[hostport]
 	if !ok {
 		newConn, _ := rpc.DialHTTP("tcp", hostport)
@@ -73,37 +100,46 @@ func (ss *storageServer) grantLease(key, hostport string) (lease storagerpc.Leas
 	}
 
 	lease = storagerpc.Lease{}
-	val, leaseok := ss.canLease[key]
+	val, leaseok := ss.canLease[key] // Check if can be leased
+	// Yes
 	if !leaseok || val {
 		lease.Granted = true
-		lease.ValidSeconds = storagerpc.LeaseSeconds
-		_, grantok := ss.leaseOwner[key]
+		lease.ValidSeconds = storagerpc.LeaseSeconds // Lease time
+		_, grantok := ss.leaseOwner[key] // Record in lease owner
 		if !grantok {
 			ss.leaseOwner[key] = list.New()
 		}
 		ss.leaseOwner[key].PushBack(&leaseTracker{hostport, time.Now()})
-	} else {
+	} else { // No leasing
 		lease.Granted = false
 		lease.ValidSeconds = 0
 	}
 	return
 }
 
+/*
+ * Revoke lease from all lease owners
+ */
 func (ss *storageServer) revokeLease(key string) {
 	ss.canLease[key] = false
 
+	// If no lease owner
 	owners, ok := ss.leaseOwner[key]
 	if !ok {
 		return
 	}
+
+	// Send revokelease rpc call to each owner if not expired
 	for element := owners.Front(); element != nil; element = element.Next() {
 		eachOwner := element.Value.(*leaseTracker)
 		timeRemaining := leaseSeconds - time.Since(eachOwner.grantedAt).Seconds()
+		// Not naturally expired
 		if timeRemaining >= 0 {
 			revokeArgs := storagerpc.RevokeLeaseArgs{key}
 			revokeReply := storagerpc.RevokeLeaseReply{}
 			curConn := ss.cachedConn[eachOwner.hostport]
 			callRes := curConn.Go("LeaseCallbacks.RevokeLease", &revokeArgs, &revokeReply, nil)
+			// This is to deal with the time out in rpc call
 			select {
 			case <-callRes.Done:
 				break
@@ -111,6 +147,7 @@ func (ss *storageServer) revokeLease(key string) {
 				break
 			}
 		}
+		// Delete the owner from the recording
 		ss.leaseOwner[key].Remove(element)
 	}
 	return
@@ -126,7 +163,7 @@ func (ss *storageServer) revokeLease(key string) {
 // This function should return only once all storage servers have joined the ring,
 // and should return a non-nil error if the storage server could not be started.
 func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID uint32) (StorageServer, error) {
-
+    // Init a server's parameter
 	s := storageServer{numNodes, nodeID, 1, false,
 		make([]storagerpc.Node, numNodes),
 		make(chan storagerpc.Node),
@@ -142,15 +179,20 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 
 	fullAddress := fmt.Sprintf("localhost:%d", port)
 	listener, _ := net.Listen("tcp", fullAddress)
+	// Register and initialize rpc
 	rpc.RegisterName("StorageServer", storagerpc.Wrap(&s))
 	rpc.HandleHTTP()
+	// Start listening the incoming call
 	go http.Serve(listener, nil)
 	selfNode := storagerpc.Node{fullAddress, nodeID}
+	// Master Node
 	if masterServerHostPort == "" {
 		s.serverList[0] = selfNode
+		// If only one node
 		if numNodes == 1{
 			s.initDone = true
 		}
+		// Wait for new nodes to join
 		for !s.initDone {
 			select {
 			//case <- s.initDoneRequest:
@@ -159,8 +201,9 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 			//	}else{
 			//		s.initDoneChanel <- 0
 			//	}
-
+			// Receive new node info
 			case newNode := <-s.newNodesChanel:
+				// Check if already joined
 				flag := false
 				for i := range s.serverList {
 					if s.serverList[i] == newNode {
@@ -168,22 +211,26 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 					}
 				}
 				fmt.Printf("[storage] New Node:%s Flag:%d\n",newNode,flag)
+				// New node
 				if !flag {
 					s.serverList[s.joinedNode] = newNode
 					s.joinedNode += 1
 				}
-
+				// Write reply
 				reply := storagerpc.RegisterReply{storagerpc.OK, s.serverList}
+				// Not ready
 				if s.joinedNode < numNodes {
 					reply = storagerpc.RegisterReply{storagerpc.NotReady, nil}
-				} else {
+				} else { // Join ready
 					s.initDone = true
 				}
+				// Return value
 				s.newNodesResult <- reply
 			}
 		}
-	} else {
+	} else { // Client node
 		fmt.Printf("[storage] Slave Routine %d\n",nodeID)
+		// Estimate connection until dial succeeded
 		connWithMaster, err := rpc.DialHTTP("tcp", masterServerHostPort)
 		if (err!=nil){
 			for {
@@ -196,9 +243,11 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 			}
 			fmt.Printf("[Fatal] storage slave cannot connect storage server")
 		}
+		// Communicate with server
 		args, reply := storagerpc.RegisterArgs{selfNode}, storagerpc.RegisterReply{}
 		for {
 			connWithMaster.Call("StorageServer.RegisterServer", &args, &reply)
+			// Check reply status
 			if reply.Status == storagerpc.OK {
 				s.initDone = true
 				s.joinedNode = numNodes
@@ -211,6 +260,9 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 	return &s, nil
 }
 
+/*
+ * Add server to serverlist
+ */
 func (ss *storageServer) RegisterServer(args *storagerpc.RegisterArgs, reply *storagerpc.RegisterReply) error {
 	reply.Status = storagerpc.OK
 	reply.Servers = ss.serverList
@@ -218,6 +270,7 @@ func (ss *storageServer) RegisterServer(args *storagerpc.RegisterArgs, reply *st
 	//isDone := <- ss.initDoneChanel
 	//if isDone != 1{
 	fmt.Printf("[storageSerer] Storage slave connect to master:%s\n",args.ServerInfo)
+	// If still wait for new node
 	if !ss.initDone {
 		ss.newNodesChanel <- args.ServerInfo
 		*reply = <-ss.newNodesResult
@@ -225,6 +278,9 @@ func (ss *storageServer) RegisterServer(args *storagerpc.RegisterArgs, reply *st
 	return nil
 }
 
+/*
+ * Get all server list
+ */
 func (ss *storageServer) GetServers(args *storagerpc.GetServersArgs, reply *storagerpc.GetServersReply) error {
 	reply.Status = storagerpc.OK
 	reply.Servers = ss.serverList
@@ -232,6 +288,7 @@ func (ss *storageServer) GetServers(args *storagerpc.GetServersArgs, reply *stor
 	//isDone := <- ss.initDoneChanel
 	//if isDone!=1 {
 	fmt.Printf("[Storage] All Nodes:%d Joined Nodes:%d Status:%d\n", ss.numNodes, ss.joinedNode, ss.initDone)
+	// If not ready
 	if !ss.initDone {
 		reply.Status = storagerpc.NotReady
 		reply.Servers = nil
@@ -239,16 +296,22 @@ func (ss *storageServer) GetServers(args *storagerpc.GetServersArgs, reply *stor
 	return nil
 }
 
+/*
+ * Get post data
+ */
 func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetReply) error {
+	// Check routing
 	if !ss.rightServer(args.Key) {
 		reply.Status = storagerpc.WrongServer
 		return nil
 	}
+	// Lock post data
 	ss.postLock.Lock()
 	val, ok := ss.postData[args.Key]
+	// Key not found
 	if !ok {
 		reply.Status = storagerpc.KeyNotFound
-	} else {
+	} else { // Find key, check lease info
 		if args.WantLease {
 			reply.Lease = ss.grantLease(args.Key, args.HostPort)
 		}
@@ -259,22 +322,28 @@ func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetRepl
 	return nil
 }
 
+/*
+ * Get user friend list
+ */
 func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.GetListReply) error {
 	if !ss.rightServer(args.Key) {
 		reply.Status = storagerpc.WrongServer
 		return nil
 	}
+	// Lock list data
 	ss.listLock.Lock()
 	val, ok := ss.listData[args.Key]
+	// Key not found
 	if !ok {
 		reply.Status = storagerpc.KeyNotFound
 	} else {
 		reply.Status = storagerpc.OK
+		// Make reply value
 		reply.Value = make([]string, val.Len())
-		if args.WantLease {
+		if args.WantLease { // Check lease
 			reply.Lease = ss.grantLease(args.Key, args.HostPort)
 		}
-
+		// Add each element to value
 		for idx, element := 0, val.Front(); element != nil; element, idx = element.Next(), idx+1 {
 			reply.Value[idx] = element.Value.(string)
 		}
@@ -284,14 +353,18 @@ func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.Get
 	return nil
 }
 
+/*
+ * Post new data
+ */
 func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
 	//fmt.Printf("[storage] Put (%s->%s)\n",args.Key,args.Value)
 	if !ss.rightServer(args.Key) {
 		reply.Status = storagerpc.WrongServer
 		return nil
 	}
+	// Revoke lease for this key
 	ss.revokeLease(args.Key)
-
+    // Lock post data
 	ss.postLock.Lock()
 	ss.postData[args.Key] = args.Value
 	ss.canLease[args.Key] = true
@@ -300,14 +373,21 @@ func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutRepl
 	return nil
 }
 
+
+/*
+ * Append new friend
+ */
 func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
 	if !ss.rightServer(args.Key) {
 		reply.Status = storagerpc.WrongServer
 		return nil
 	}
+	// Revoke lease
 	ss.revokeLease(args.Key)
-	ss.listLock.Lock()
 
+	// Add lock to list
+	ss.listLock.Lock()
+	// Check and new list
 	_, ok := ss.listData[args.Key]
 	if !ok {
 		ss.listData[args.Key] = list.New()
@@ -316,11 +396,12 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 	flag := false
 	for element := ss.listData[args.Key].Front(); element != nil; element = element.Next() {
 		if args.Value == element.Value.(string) {
+			// Friend already exist
 			reply.Status = storagerpc.ItemExists
 			flag = true
 		}
 	}
-
+ 	// If not exist
 	if !flag {
 		reply.Status = storagerpc.OK
 		ss.listData[args.Key].PushBack(args.Value)
@@ -330,19 +411,49 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 	return nil
 }
 
+/*
+ * Delete post data
+ */ 
+func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.DeleteReply) error {
+	if !ss.rightServer(args.Key) {
+		reply.Status = storagerpc.WrongServer
+		return nil
+	}
+	// Revoke
+	ss.revokeLease(args.Key)
+	// Lock post data
+	ss.postLock.Lock()
+	_, ok := ss.postData[args.Key]
+	// If found
+	if ok {
+		delete(ss.postData, args.Key)
+		reply.Status = storagerpc.OK
+	} else { // Not found
+		reply.Status = storagerpc.KeyNotFound
+	}
+	ss.postLock.Unlock()
+	return nil
+}
+
+/*
+ * Remove a friend from list
+ */
 func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
 	if !ss.rightServer(args.Key) {
 		reply.Status = storagerpc.WrongServer
 		return nil
 	}
+	// Revoke
 	ss.revokeLease(args.Key)
-
+	// Lock 
 	ss.listLock.Lock()
 
+	// Check if empty list
 	val, ok := ss.listData[args.Key]
 	if !ok {
 		reply.Status = storagerpc.ItemNotFound
 	}
+	// Find friend in list
 	flag := false
 	for element := val.Front(); element != nil; element = element.Next() {
 		if args.Value == element.Value.(string) {
@@ -351,30 +462,11 @@ func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storage
 			flag = true
 		}
 	}
+	// If not found in list
 	if !flag {
 		reply.Status = storagerpc.ItemNotFound
 	}
 	ss.canLease[args.Key] = true
 	ss.listLock.Unlock()
-	return nil
-}
-
-func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.DeleteReply) error {
-	if !ss.rightServer(args.Key) {
-		reply.Status = storagerpc.WrongServer
-		return nil
-	}
-
-	ss.revokeLease(args.Key)
-
-	ss.postLock.Lock()
-	_, ok := ss.postData[args.Key]
-	if ok {
-		delete(ss.postData, args.Key)
-		reply.Status = storagerpc.OK
-	} else {
-		reply.Status = storagerpc.KeyNotFound
-	}
-	ss.postLock.Unlock()
 	return nil
 }
