@@ -3,7 +3,7 @@ package tribserver
 import (
 	"net"
 	"net/rpc"
-	//"errors"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -37,23 +37,17 @@ func NewTribServer(masterServerHostPort, myHostPort string) (TribServer, error) 
 	}
 
 	//Step2: Establish the http listener to listen tribclient
-	fmt.Printf("[tribServer] 1\n")
 	tribServer := new(tribServer)
 	err := rpc.RegisterName("TribServer", tribrpc.Wrap(tribServer))
-	fmt.Printf("[tribServer] 2\n")
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("[tribServer] 3\n")
 	rpc.HandleHTTP()
-	fmt.Printf("[tribServer] 4\n")
 	listener, err2 := net.Listen("tcp", myHostPort)
-	fmt.Printf("[tribServer] 5\n")
 	if err2 != nil {
 		return nil, err2
 	}
 	go http.Serve(listener, nil)
-	fmt.Printf("[tribServer] 6\n")
 
 	//Step3: Initalize the key-value store
 	tribServer.lib = lib
@@ -64,7 +58,7 @@ func NewTribServer(masterServerHostPort, myHostPort string) (TribServer, error) 
 
 func (ts *tribServer) CreateUser(args *tribrpc.CreateUserArgs, reply *tribrpc.CreateUserReply) error {
 	userID := args.UserID
-	//fmt.Printf("[tribServer] Create user:%s\n",userID)
+	fmt.Printf("[tribServer] Create user:%s\n",userID)
 	_, err := ts.lib.GetList(userID + "-sub")
 	if err == nil {
 		//fmt.Printf("[tribServer] user:%d existed\n",userID)
@@ -136,7 +130,7 @@ func (ts *tribServer) RemoveSubscription(args *tribrpc.SubscriptionArgs, reply *
 	}
 	err := ts.lib.RemoveFromList(userID+"-sub", targetID)
 	if err != nil {
-		return err
+			return errors.New("[Fatal] Remove From List failed:"+userID+"-sub,"+targetID)
 	}
 	reply.Status = tribrpc.OK
 	return nil

@@ -9,6 +9,7 @@ import (
 	"net/rpc"
 	"strconv"
 	"time"
+	"fmt"
 
 	"github.com/cmu440/tribbler/rpc/tribrpc"
 )
@@ -33,14 +34,7 @@ func NewTribClient(serverHost string, serverPort int) (TribClient, error) {
 			break
 		}
 	}
-	/*cli, err = rpc.DialHTTP("tcp", net.JoinHostPort(serverHost, strconv.Itoa(serverPort)))
-	if err != nil {
-		time.Sleep(1000 * time.Millisecond)
-		cli, err = rpc.DialHTTP("tcp", net.JoinHostPort(serverHost, strconv.Itoa(serverPort)))
-		if err != nil {
-			return nil, err
-		}
-	}*/
+	fmt.Printf("[tribClient] Establish connection to Trib server!\n")
 	return &tribClient{client: cli}, nil
 }
 

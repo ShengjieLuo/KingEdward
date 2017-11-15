@@ -167,6 +167,7 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 						flag = true
 					}
 				}
+				fmt.Printf("[storage] New Node:%s Flag:%d\n",newNode,flag)
 				if !flag {
 					s.serverList[s.joinedNode] = newNode
 					s.joinedNode += 1
@@ -182,7 +183,10 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 			}
 		}
 	} else {
-		connWithMaster, _ := rpc.DialHTTP("tcp", masterServerHostPort)
+		connWithMaster, err := rpc.DialHTTP("tcp", masterServerHostPort)
+		if (err!=nil){
+			fmt.Printf("[Fatal] storage slave cannot connect storage server")
+		}
 		args, reply := storagerpc.RegisterArgs{selfNode}, storagerpc.RegisterReply{}
 		for {
 			connWithMaster.Call("StorageServer.RegisterServer", &args, &reply)
@@ -204,6 +208,7 @@ func (ss *storageServer) RegisterServer(args *storagerpc.RegisterArgs, reply *st
 	//ss.initDoneRequest <- 1
 	//isDone := <- ss.initDoneChanel
 	//if isDone != 1{
+	fmt.Printf("[storageSerer] Storage slave connect to master:%s\n",args.ServerInfo)
 	if !ss.initDone {
 		ss.newNodesChanel <- args.ServerInfo
 		*reply = <-ss.newNodesResult
@@ -271,6 +276,7 @@ func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.Get
 }
 
 func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
+	//fmt.Printf("[storage] Put (%s->%s)\n",args.Key,args.Value)
 	if !ss.rightServer(args.Key) {
 		reply.Status = storagerpc.WrongServer
 		return nil
