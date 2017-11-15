@@ -65,7 +65,7 @@ func (ts *tribServer) CreateUser(args *tribrpc.CreateUserArgs, reply *tribrpc.Cr
 		reply.Status = tribrpc.Exists
 	} else {
 		key := userID + "-sub"
-		err1 := ts.lib.AppendToList(key, userID)
+		err1 := ts.lib.AppendToList(key, "-1")
 		key = userID + "-trib"
 		err2 := ts.lib.AppendToList(key, "init")
 		if err1 != nil || err2 != nil {

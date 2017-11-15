@@ -439,8 +439,8 @@ func (ls *libstore) RemoveFromList(key, removeItem string) error {
 	}
 	if reply.Status == storagerpc.OK {
 		return nil
-	} else if reply.Status == storagerpc.ItemNotFound{
-		return nil
+	//} else if reply.Status == storagerpc.ItemNotFound{
+	//	return nil
 	} else {
 		//fmt.Printf("[libstore] RemoveFromList Error Reply Status:%d\n",reply.Status)
 		return errors.New(string(reply.Status))
@@ -461,8 +461,8 @@ func (ls *libstore) AppendToList(key, newItem string) error {
 	}
 	if reply.Status == storagerpc.OK {
 		return nil
-	} else if reply.Status == storagerpc.ItemExists {
-		return nil
+	//} else if reply.Status == storagerpc.ItemExists {
+	//	return nil
 	} else {
 		fmt.Printf("[libstore] AppendToList Error Reply Status:%d\n",reply.Status)
 		return errors.New(string(reply.Status))
