@@ -218,23 +218,23 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 	fmt.Printf("[libstore] Create new libstore\n")
 	var cli *rpc.Client
 	var err error
-	/*for {
-			cli, err = rpc.DialHTTP("tcp", masterServerHostPort)
-			if err != nil {
-				time.Sleep(1 * time.Second)
-				fmt.Println(err)
-				fmt.Printf("[libstore] Repeat Connect Storage Server Master\n")
-			} else {
-	    		fmt.Printf("[libstore] Establish Connection with Storage Server Master\n")
-				break
-			}
-		}*/
-
 	cli, err = rpc.DialHTTP("tcp", masterServerHostPort)
 	if err != nil {
-		return nil, err
+		count:=0
+		for {
+			cli, err = rpc.DialHTTP("tcp", masterServerHostPort)
+			if (err!=nil){
+				time.Sleep(500 * time.Millisecond)
+				count++
+				if (count>10){
+					return nil,err
+				}
+			} else {
+				fmt.Printf("[libstore] Establish Connection with Storage Server Master\n")
+				break
+			}
+		}
 	}
-
 	fmt.Printf("[libstore] Establish Connection with Storage Server Master\n")
 	//Get Routing Servers List
 	clients := make(hashClientSlice, 0)
@@ -251,7 +251,7 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 			if retryCount<20{
 				retryCount += 1
 				continue
-			} else {	
+			} else {
 				return nil, errors.New("[fatal] Storage Server not ready after 20 retries!\n")
 			}
 		}
@@ -442,7 +442,7 @@ func (ls *libstore) RemoveFromList(key, removeItem string) error {
 	//} else if reply.Status == storagerpc.ItemNotFound{
 	//	return nil
 	} else {
-		//fmt.Printf("[libstore] RemoveFromList Error Reply Status:%d\n",reply.Status)
+		fmt.Printf("[libstore] RemoveFromList Error Reply Status:%d\n",reply.Status)
 		return errors.New(string(reply.Status))
 	}
 }

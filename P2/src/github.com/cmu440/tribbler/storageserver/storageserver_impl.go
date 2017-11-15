@@ -183,8 +183,17 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 			}
 		}
 	} else {
+		fmt.Printf("[storage] Slave Routine %d\n",nodeID)
 		connWithMaster, err := rpc.DialHTTP("tcp", masterServerHostPort)
 		if (err!=nil){
+			for {
+				connWithMaster, err = rpc.DialHTTP("tcp", masterServerHostPort)
+				if (err==nil){
+					break
+				} else {
+					time.Sleep(time.Second)
+				}
+			}
 			fmt.Printf("[Fatal] storage slave cannot connect storage server")
 		}
 		args, reply := storagerpc.RegisterArgs{selfNode}, storagerpc.RegisterReply{}

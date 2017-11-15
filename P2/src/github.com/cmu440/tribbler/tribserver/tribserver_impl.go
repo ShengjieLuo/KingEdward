@@ -13,6 +13,7 @@ import (
 
 	"github.com/cmu440/tribbler/libstore"
 	"github.com/cmu440/tribbler/rpc/tribrpc"
+	"github.com/cmu440/tribbler/rpc/storagerpc"
 )
 
 type tribServer struct {
@@ -65,7 +66,7 @@ func (ts *tribServer) CreateUser(args *tribrpc.CreateUserArgs, reply *tribrpc.Cr
 		reply.Status = tribrpc.Exists
 	} else {
 		key := userID + "-sub"
-		err1 := ts.lib.AppendToList(key, "-1")
+		err1 := ts.lib.AppendToList(key, "init")
 		key = userID + "-trib"
 		err2 := ts.lib.AppendToList(key, "init")
 		if err1 != nil || err2 != nil {
@@ -97,7 +98,8 @@ func (ts *tribServer) AddSubscription(args *tribrpc.SubscriptionArgs, reply *tri
 		}
 	}
 	err := ts.lib.AppendToList(userID+"-sub", targetID)
-	if err != nil {
+	if err != nil && err.Error()!=string(storagerpc.ItemExists) {
+		fmt.Printf("[tribServer] Addsubscription Error:%s\n",err.Error())
 		return err
 	}
 	reply.Status = tribrpc.OK
@@ -129,7 +131,8 @@ func (ts *tribServer) RemoveSubscription(args *tribrpc.SubscriptionArgs, reply *
 		return nil
 	}
 	err := ts.lib.RemoveFromList(userID+"-sub", targetID)
-	if err != nil {
+	if err != nil && err.Error()!=string(storagerpc.ItemNotFound) {
+			fmt.Printf("[tribServer] Removescription Error:%s\n",err.Error())
 			return errors.New("[Fatal] Remove From List failed:"+userID+"-sub,"+targetID)
 	}
 	reply.Status = tribrpc.OK
